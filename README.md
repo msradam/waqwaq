@@ -146,6 +146,16 @@ The repository includes a small example wiki about the Waq-Waq myth:
 waqwaq serve examples/waqwaq-myth
 ```
 
+### Static export
+
+Render the wiki to a standalone static site (no server, no AI), for publishing or backup:
+
+```bash
+waqwaq export ./wiki ./site
+```
+
+Serve the output directory with any static file server.
+
 ## Configuration
 
 `waqwaq serve [dir]` accepts:
@@ -229,6 +239,8 @@ Optional settings live in `<dir>/.waqwaq/config.json`. Every field is optional, 
 - `lint.banned_terms` flags page bodies containing a term. `severity` is `warning` (default) or `error`, and an `error` blocks the write.
 
 For a full restyle, add `<dir>/.waqwaq/custom.css`. It loads after the built-in stylesheet, so you can override any rule or CSS variable, including the theme colors. Add it before starting the server.
+
+Drop markdown files in `<dir>/.waqwaq/templates/` to offer them as starting points when creating a page (an ADR or postmortem skeleton, for example). They appear on the new-page editor.
 
 Search uses SQLite FTS5 with prefix matching, rebuilt automatically when pages change. The driver is pure Go, so the binary stays a single static file.
 

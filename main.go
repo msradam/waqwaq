@@ -1,14 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
+	"html/template"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"syscall"
 	"time"
 
@@ -37,6 +41,8 @@ func main() {
 		cmdInit(os.Args[2:])
 	case "ingest":
 		cmdIngest(os.Args[2:])
+	case "export":
+		cmdExport(os.Args[2:])
 	case "version", "-v", "--version":
 		fmt.Println("waqwaq", version)
 	default:
@@ -53,6 +59,7 @@ usage:
   waqwaq serve  [dir] [--addr] [--read-only] [--review] [--tokens FILE]
                                       serve web UI + MCP over one port
   waqwaq ingest <dir> <file>...       add raw documents to the wiki's raw/ area
+  waqwaq export <dir> <outdir>        render the wiki to a static HTML site
   waqwaq version
 
 Pages are served from <dir>/wiki if present, otherwise from <dir> itself, so a
@@ -232,6 +239,109 @@ func cmdIngest(args []string) {
 	fmt.Println("Agents can read these via wiki_list_raw / wiki_read_raw,")
 	fmt.Println("then synthesise pages with wiki_write (lint runs before each write lands).")
 }
+
+var wikiLinkHTML = regexp.MustCompile(`(href|src)="/wiki/([^"#]+)(#[^"]*)?"`)
+
+func cmdExport(args []string) {
+	fset := flag.NewFlagSet("export", flag.ExitOnError)
+	rest := parseArgs(fset, args)
+	if len(rest) < 2 {
+		log.Fatal("usage: waqwaq export <dir> <outdir>")
+	}
+	st, err := store.New(rest[0])
+	if err != nil {
+		log.Fatalf("export: %v", err)
+	}
+	out := rest[1]
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		log.Fatalf("export: %v", err)
+	}
+	metas, err := st.List()
+	if err != nil {
+		log.Fatalf("export: %v", err)
+	}
+	rnd := render.New()
+	tmpl := template.Must(template.New("static").Parse(staticPageHTML))
+	site := "Waqwaq"
+	if cfg, err := config.Load(filepath.Join(st.Root(), ".waqwaq", "config.json")); err == nil && cfg.Title != "" {
+		site = cfg.Title
+	}
+
+	for _, m := range metas {
+		page, err := st.Read(m.Slug)
+		if err != nil {
+			continue
+		}
+		html, _, err := rnd.Render(page.Body)
+		if err != nil {
+			continue
+		}
+		rewritten := template.HTML(wikiLinkHTML.ReplaceAllString(string(html), `${1}="/${2}.html${3}"`)) //nolint:gosec
+		var buf bytes.Buffer
+		_ = tmpl.Execute(&buf, map[string]any{"Title": page.Title, "Site": site, "Content": rewritten, "Pages": metas})
+		dest := filepath.Join(out, filepath.FromSlash(m.Slug)+".html")
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			log.Fatalf("export: %v", err)
+		}
+		if err := os.WriteFile(dest, buf.Bytes(), 0o644); err != nil {
+			log.Fatalf("export: %v", err)
+		}
+	}
+
+	copyDir(filepath.Join(st.Root(), "assets"), filepath.Join(out, "assets"))
+	if sfs, err := server.StaticFS(); err == nil {
+		_ = os.MkdirAll(filepath.Join(out, "static"), 0o755)
+		for _, name := range []string{"style.css", "favicon.svg"} {
+			if data, err := fs.ReadFile(sfs, name); err == nil {
+				_ = os.WriteFile(filepath.Join(out, "static", name), data, 0o644)
+			}
+		}
+	}
+	fmt.Printf("Exported %d pages to %s\n", len(metas), out)
+	fmt.Printf("Serve it with any static file server, e.g. python3 -m http.server -d %s\n", out)
+}
+
+func copyDir(src, dst string) {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return
+	}
+	_ = os.MkdirAll(dst, 0o755)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if data, err := os.ReadFile(filepath.Join(src, e.Name())); err == nil {
+			_ = os.WriteFile(filepath.Join(dst, e.Name()), data, 0o644)
+		}
+	}
+}
+
+const staticPageHTML = `<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · {{.Site}}</title>
+<meta name="color-scheme" content="light dark">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="/index.html">🌳 {{.Site}}</a>
+    <nav>{{range .Pages}}<a class="nav-link" href="/{{.Slug}}.html">{{.Title}}</a>{{end}}</nav>
+  </aside>
+  <main class="content"><article class="markdown">{{.Content}}</article></main>
+</div>
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: true, theme: 'neutral' });
+</script>
+</body>
+</html>
+`
 
 // parseArgs parses flags that may appear before, after, or between positional
 // arguments, returning the positionals in order. The stdlib flag package stops

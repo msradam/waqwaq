@@ -435,10 +435,11 @@ func (s *Server) renderPage(w http.ResponseWriter, r *http.Request, page *store.
 }
 
 type editView struct {
-	Chrome  chrome
-	Slug    string
-	Content string
-	Issues  []lint.Issue
+	Chrome    chrome
+	Slug      string
+	Content   string
+	Templates []string
+	Issues    []lint.Issue
 }
 
 // handleEdit serves the in-browser editor. Saving runs the same lint as an MCP
@@ -481,12 +482,20 @@ func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	content := "---\ntitle: \n---\n\n"
+	var templates []string
 	if slug != "" {
 		if p, err := s.store.Read(slug); err == nil {
 			content = p.Raw
 		}
+	} else {
+		templates = s.store.ListTemplates()
+		if t := r.URL.Query().Get("template"); t != "" {
+			if c, err := s.store.ReadTemplate(t); err == nil {
+				content = c
+			}
+		}
 	}
-	s.exec(w, "edit.html", editView{Chrome: s.chrome(r, slug, ""), Slug: slug, Content: content})
+	s.exec(w, "edit.html", editView{Chrome: s.chrome(r, slug, ""), Slug: slug, Content: content, Templates: templates})
 }
 
 type healthView struct {

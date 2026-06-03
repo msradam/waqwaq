@@ -14,6 +14,9 @@
     {{if .Issues}}
     <ul class="lint">{{range .Issues}}<li class="lint-{{.Severity}}"><strong>{{.Severity}}</strong>: {{.Message}}</li>{{end}}</ul>
     {{end}}
+    {{if and (not .Slug) .Templates}}
+    <p class="muted">Start from a template: {{range .Templates}}<a class="tag" href="/edit/?template={{.}}">{{.}}</a> {{end}}</p>
+    {{end}}
     <form class="editor" method="post" action="/edit/{{.Slug}}">
       {{if not .Slug}}<input class="slug-input" type="text" name="slug" placeholder="slug, e.g. runbooks/deploy" autofocus>{{end}}
       <textarea name="content" spellcheck="false">{{.Content}}</textarea>
