@@ -6,7 +6,7 @@ import (
 )
 
 func TestCalloutAndTOC(t *testing.T) {
-	r := New()
+	r := New("")
 	md := "## Setup\n\n> [!WARNING]\n> Be careful.\n\n### Sub step\n\ntext\n"
 	html, toc, err := r.Render(md)
 	if err != nil {
@@ -27,8 +27,23 @@ func TestCalloutAndTOC(t *testing.T) {
 	}
 }
 
+func TestWikilinkBasePrefix(t *testing.T) {
+	for _, tc := range []struct{ base, want string }{
+		{"", `href="/wiki/runbook"`},
+		{"/w/platform", `href="/w/platform/wiki/runbook"`},
+	} {
+		html, _, err := New(tc.base).Render("see [[runbook]]\n")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(html), tc.want) {
+			t.Errorf("base %q: want %s in\n%s", tc.base, tc.want, html)
+		}
+	}
+}
+
 func TestPlainBlockquoteUntouched(t *testing.T) {
-	r := New()
+	r := New("")
 	html, _, err := r.Render("> just a quote\n")
 	if err != nil {
 		t.Fatal(err)

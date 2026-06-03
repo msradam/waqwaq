@@ -125,6 +125,12 @@ func cmdServe(args []string) {
 		log.Printf("  MCP    : http://%s/mcp   (auth: %s, writes: %s)", *addr, authMode, policy)
 		if cfg.Web.ProxyHeader != "" {
 			log.Printf("  web auth: identity from proxy header %q", cfg.Web.ProxyHeader)
+		} else if len(cfg.Web.Users) > 0 {
+			log.Printf("  web auth: built-in login (%d user(s))", len(cfg.Web.Users))
+		}
+		webAuth := cfg.Web.ProxyHeader != "" || len(cfg.Web.Users) > 0
+		if webAuth && !reg.Enabled() && !*readOnly {
+			log.Printf("  warning: web UI requires login but the MCP endpoint is open; add %s/.waqwaq/tokens.json to require a bearer token", dirs[0])
 		}
 	} else {
 		wikis := make([]server.WikiRef, len(dirs))
@@ -216,7 +222,7 @@ func buildWiki(dir, base string, readOnly, forceReview bool, tokensPath string, 
 		users = append(users, server.WebUser{Name: u.Name, Hash: u.Password, Role: u.Role})
 	}
 	srv, err := server.New(server.Options{
-		Store: st, Renderer: render.New(), MCP: mcpSrv, Auth: reg, Queue: q, Search: searcher, Rules: cfg.Lint,
+		Store: st, Renderer: render.New(base), MCP: mcpSrv, Auth: reg, Queue: q, Search: searcher, Rules: cfg.Lint,
 		Web:      server.WebPolicy{ProxyHeader: cfg.Web.ProxyHeader, DefaultRole: cfg.Web.DefaultRole, Admins: cfg.Web.Admins, Editors: cfg.Web.Editors, Users: users},
 		ReadOnly: readOnly,
 		Site:     server.Site{Title: cfg.Title, Accent: cfg.Accent, Theme: cfg.Theme},
@@ -339,7 +345,7 @@ func cmdExport(args []string) {
 	if err != nil {
 		log.Fatalf("export: %v", err)
 	}
-	rnd := render.New()
+	rnd := render.New("")
 	tmpl := template.Must(template.New("static").Parse(staticPageHTML))
 	site := "Waqwaq"
 	if cfg, err := config.Load(filepath.Join(st.Root(), ".waqwaq", "config.json")); err == nil && cfg.Title != "" {

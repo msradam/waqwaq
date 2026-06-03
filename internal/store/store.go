@@ -146,6 +146,11 @@ func (s *Store) pathFor(slug string) (string, error) {
 	if clean == "" {
 		return "", errors.New("empty slug")
 	}
+	for _, seg := range strings.Split(clean, "/") {
+		if strings.HasPrefix(seg, ".") {
+			return "", fmt.Errorf("invalid slug %q", slug)
+		}
+	}
 	p := filepath.Clean(filepath.Join(s.pages, filepath.FromSlash(clean)+".md"))
 	if p != s.pages && !strings.HasPrefix(p, s.pages+sep) {
 		return "", fmt.Errorf("invalid slug %q", slug)

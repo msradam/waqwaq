@@ -38,6 +38,16 @@ func (s *Store) ReadAtRev(slug, ref string) (string, error) {
 	return string(out), nil
 }
 
+// RevExists reports whether ref resolves to a commit in the repo.
+func (s *Store) RevExists(ref string) bool {
+	if !s.git || !revRe.MatchString(ref) {
+		return false
+	}
+	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+	cmd.Dir = s.gitRoot
+	return cmd.Run() == nil
+}
+
 type Change struct {
 	Slug   string    `json:"slug"`
 	Title  string    `json:"title"`

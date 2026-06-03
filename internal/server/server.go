@@ -715,6 +715,10 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if !s.store.RevExists(rev) {
+		http.Error(w, "unknown revision", http.StatusNotFound)
+		return
+	}
 	to, err := s.store.ReadAtRev(slug, rev)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

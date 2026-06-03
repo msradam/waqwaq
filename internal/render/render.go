@@ -34,13 +34,15 @@ type Renderer struct {
 	toc goldmark.Markdown
 }
 
-func New() *Renderer {
+// New builds a renderer. base is the URL prefix wikilinks resolve against:
+// "" for a single wiki at the root, "/w/<name>" for a wiki in farm mode.
+func New(base string) *Renderer {
 	md := goldmark.New(
 		goldmark.WithExtensions(
 			extension.GFM,
 			highlighting.NewHighlighting(highlighting.WithStyle("github")),
 			&mermaid.Extender{RenderMode: mermaid.RenderModeClient, NoScript: true},
-			&wikilink.Extender{Resolver: wikiResolver{}},
+			&wikilink.Extender{Resolver: wikiResolver{base: base}},
 			&anchor.Extender{},
 		),
 		goldmark.WithParserOptions(
@@ -156,10 +158,10 @@ func stripLeading(para ast.Node, n int) {
 	}
 }
 
-type wikiResolver struct{}
+type wikiResolver struct{ base string }
 
-func (wikiResolver) ResolveWikilink(n *wikilink.Node) ([]byte, error) {
-	dest := append([]byte("/wiki/"), n.Target...)
+func (w wikiResolver) ResolveWikilink(n *wikilink.Node) ([]byte, error) {
+	dest := append([]byte(w.base+"/wiki/"), n.Target...)
 	if len(n.Fragment) > 0 {
 		dest = append(dest, '#')
 		dest = append(dest, n.Fragment...)
