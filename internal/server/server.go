@@ -19,6 +19,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/msradam/waqwaq/internal/auth"
+	"github.com/msradam/waqwaq/internal/lint"
 	"github.com/msradam/waqwaq/internal/render"
 	"github.com/msradam/waqwaq/internal/review"
 	"github.com/msradam/waqwaq/internal/search"
@@ -42,6 +43,7 @@ type Server struct {
 	auth      *auth.Registry
 	queue     *review.Queue
 	search    search.Searcher
+	rules     lint.Rules
 	readOnly  bool
 	title     string
 	accent    string
@@ -49,7 +51,7 @@ type Server struct {
 	customCSS string // path to .waqwaq/custom.css, or "" if absent
 }
 
-func New(st *store.Store, rnd *render.Renderer, mcpSrv *mcp.Server, reg *auth.Registry, q *review.Queue, searcher search.Searcher, readOnly bool, site Site) (*Server, error) {
+func New(st *store.Store, rnd *render.Renderer, mcpSrv *mcp.Server, reg *auth.Registry, q *review.Queue, searcher search.Searcher, rules lint.Rules, readOnly bool, site Site) (*Server, error) {
 	tmpl, err := template.ParseFS(assets, "web/templates/*.html")
 	if err != nil {
 		return nil, err
@@ -70,7 +72,7 @@ func New(st *store.Store, rnd *render.Renderer, mcpSrv *mcp.Server, reg *auth.Re
 		searcher = st
 	}
 	return &Server{
-		store: st, renderer: rnd, tmpl: tmpl, mcp: mcpSrv, auth: reg, queue: q, search: searcher, readOnly: readOnly,
+		store: st, renderer: rnd, tmpl: tmpl, mcp: mcpSrv, auth: reg, queue: q, search: searcher, rules: rules, readOnly: readOnly,
 		title: title, accent: site.Accent, theme: theme, customCSS: custom,
 	}, nil
 }
@@ -97,6 +99,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/tags/", s.handleTags)
 	mux.HandleFunc("/tags", s.handleTags)
 	mux.HandleFunc("/history/", s.handleHistory)
+	mux.HandleFunc("/edit/", s.handleEdit)
 	mux.HandleFunc("/search", s.handleSearch)
 	mux.HandleFunc("/wiki/", s.handlePage)
 	mux.HandleFunc("/", s.handleIndex)
@@ -297,6 +300,61 @@ func (s *Server) renderPage(w http.ResponseWriter, page *store.Page) {
 		Chrome: s.chrome(page.Slug, ""), Title: page.Title, Content: html, Slug: page.Slug,
 		TOC: toc, Tags: store.FrontmatterTags(page.Frontmatter), Backlinks: backlinks, Attribution: attr,
 	})
+}
+
+type editView struct {
+	Chrome  chrome
+	Slug    string
+	Content string
+	Issues  []lint.Issue
+}
+
+// handleEdit serves the in-browser editor. Saving runs the same lint as an MCP
+// write and commits through the store. It is gated like the review actions:
+// local access or a trusted token.
+func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
+	if s.readOnly {
+		http.Error(w, "server is read-only", http.StatusForbidden)
+		return
+	}
+	if !s.canReview(r) {
+		http.Error(w, "editing requires local access or a trusted token", http.StatusForbidden)
+		return
+	}
+	slug := strings.Trim(strings.TrimPrefix(r.URL.Path, "/edit/"), "/")
+
+	if r.Method == http.MethodPost {
+		if slug == "" {
+			slug = strings.Trim(strings.TrimSpace(r.FormValue("slug")), "/")
+		}
+		content := r.FormValue("content")
+		if slug == "" {
+			s.exec(w, "edit.html", editView{Chrome: s.chrome("", ""), Content: content,
+				Issues: []lint.Issue{{Severity: "error", Message: "a slug is required"}}})
+			return
+		}
+		fm, body := store.SplitFrontmatter(content)
+		known, _ := s.store.KnownSlugs()
+		if issues := lint.Check(fm, body, known, s.rules); lint.HasErrors(issues) {
+			s.exec(w, "edit.html", editView{Chrome: s.chrome(slug, ""), Slug: slug, Content: content, Issues: issues})
+			return
+		}
+		author := fmt.Sprintf("%s <operator@waqwaq.local>", operatorName)
+		if err := s.store.Write(slug, content, author, "waqwaq: edit "+slug); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Redirect(w, r, "/wiki/"+slug, http.StatusSeeOther)
+		return
+	}
+
+	content := "---\ntitle: \n---\n\n"
+	if slug != "" {
+		if p, err := s.store.Read(slug); err == nil {
+			content = p.Raw
+		}
+	}
+	s.exec(w, "edit.html", editView{Chrome: s.chrome(slug, ""), Slug: slug, Content: content})
 }
 
 type healthView struct {

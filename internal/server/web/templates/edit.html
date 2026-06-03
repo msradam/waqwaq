@@ -1,0 +1,28 @@
+{{define "edit.html"}}<!doctype html>
+<html lang="en" data-theme="{{.Chrome.Theme}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{if .Slug}}Edit {{.Slug}}{{else}}New page{{end}} · {{.Chrome.SiteTitle}}</title>
+{{template "headlinks" .Chrome}}
+</head>
+<body>
+<div class="layout">
+  {{template "sidebar" .Chrome}}
+  <main class="content">
+    <h1>{{if .Slug}}Edit{{else}}New page{{end}}</h1>
+    {{if .Issues}}
+    <ul class="lint">{{range .Issues}}<li class="lint-{{.Severity}}"><strong>{{.Severity}}</strong>: {{.Message}}</li>{{end}}</ul>
+    {{end}}
+    <form class="editor" method="post" action="/edit/{{.Slug}}">
+      {{if not .Slug}}<input class="slug-input" type="text" name="slug" placeholder="slug, e.g. runbooks/deploy" autofocus>{{end}}
+      <textarea name="content" spellcheck="false">{{.Content}}</textarea>
+      <div class="editor-actions">
+        <button class="btn btn-approve" type="submit">Save</button>
+        <a class="btn btn-reject" href="{{if .Slug}}/wiki/{{.Slug}}{{else}}/{{end}}">Cancel</a>
+      </div>
+    </form>
+  </main>
+</div>
+</body>
+</html>{{end}}

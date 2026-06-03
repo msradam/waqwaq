@@ -118,7 +118,7 @@ func cmdServe(args []string) {
 	}
 
 	mcpSrv := mcpserver.New(st, q, reg, mcpserver.Options{ReadOnly: *readOnly, ForceReview: *forceReview, Rules: cfg.Lint, Search: searcher})
-	srv, err := server.New(st, render.New(), mcpSrv, reg, q, searcher, *readOnly, server.Site{
+	srv, err := server.New(st, render.New(), mcpSrv, reg, q, searcher, cfg.Lint, *readOnly, server.Site{
 		Title: cfg.Title, Accent: cfg.Accent, Theme: cfg.Theme,
 	})
 	if err != nil {

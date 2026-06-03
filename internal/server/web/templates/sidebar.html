@@ -17,6 +17,7 @@
   <a class="nav-link section{{if eq .Active "proposals"}} active{{end}}" href="/proposals">Proposals{{if .Pending}} <span class="badge">{{.Pending}}</span>{{end}}</a>
   <a class="nav-link section{{if eq .Active "health"}} active{{end}}" href="/health">Canopy</a>
   <a class="nav-link section{{if eq .Active "tags"}} active{{end}}" href="/tags">Tags</a>
+  {{if not .ReadOnly}}<a class="nav-link section" href="/edit/">+ New page</a>{{end}}
   <nav>
     {{if .Nav}}{{template "navtree" .Nav}}{{else}}<span class="muted">No pages yet.</span>{{end}}
   </nav>

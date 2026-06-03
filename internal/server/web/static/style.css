@@ -324,6 +324,29 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .history { border-collapse: collapse; max-width: var(--max); width: 100%; }
 .history td { padding: 6px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
 
+.editor { max-width: var(--max); display: flex; flex-direction: column; gap: 12px; }
+.editor textarea {
+  width: 100%;
+  min-height: 60vh;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--code-bg);
+  color: var(--fg);
+  font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  resize: vertical;
+}
+.slug-input {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 14px;
+}
+.editor-actions { display: flex; gap: 12px; align-items: center; }
+.btn { display: inline-block; text-decoration: none; }
+
 @media (max-width: 1100px) {
   .toc-rail { display: none; }
 }
