@@ -10,10 +10,10 @@
 <div class="layout">
   {{template "sidebar" .Chrome}}
   <main class="content">
-    <p class="muted"><a href="/proposals">← Proposals</a></p>
+    <p class="muted"><a href="{{$.Chrome.Base}}/proposals">← Proposals</a></p>
     <h1>{{.P.Title}}</h1>
     <p class="muted">
-      Proposal for <a href="/wiki/{{.P.Slug}}">{{.P.Slug}}</a>,
+      Proposal for <a href="{{$.Chrome.Base}}/wiki/{{.P.Slug}}">{{.P.Slug}}</a>,
       by <strong>{{.P.Author}}</strong>,
       {{.P.Created.Format "2006-01-02 15:04"}}.
       Status: <span class="status status-{{.P.Status}}">{{.P.Status}}</span>
@@ -36,11 +36,11 @@
         <p class="muted">The server is read-only, so approving is disabled.</p>
       {{else}}
       <div class="actions">
-        <form method="post" action="/proposals/{{.P.ID}}">
+        <form method="post" action="{{$.Chrome.Base}}/proposals/{{.P.ID}}">
           <input type="hidden" name="action" value="approve">
           <button class="btn btn-approve" type="submit">Approve and merge</button>
         </form>
-        <form method="post" action="/proposals/{{.P.ID}}" class="reject-form">
+        <form method="post" action="{{$.Chrome.Base}}/proposals/{{.P.ID}}" class="reject-form">
           <input type="hidden" name="action" value="reject">
           <input type="text" name="reason" placeholder="Reason (optional)">
           <button class="btn btn-reject" type="submit">Reject</button>

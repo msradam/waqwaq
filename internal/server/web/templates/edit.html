@@ -15,14 +15,14 @@
     <ul class="lint">{{range .Issues}}<li class="lint-{{.Severity}}"><strong>{{.Severity}}</strong>: {{.Message}}</li>{{end}}</ul>
     {{end}}
     {{if and (not .Slug) .Templates}}
-    <p class="muted">Start from a template: {{range .Templates}}<a class="tag" href="/edit/?template={{.}}">{{.}}</a> {{end}}</p>
+    <p class="muted">Start from a template: {{range .Templates}}<a class="tag" href="{{$.Chrome.Base}}/edit/?template={{.}}">{{.}}</a> {{end}}</p>
     {{end}}
-    <form class="editor" method="post" action="/edit/{{.Slug}}">
+    <form class="editor" method="post" action="{{$.Chrome.Base}}/edit/{{.Slug}}">
       {{if not .Slug}}<input class="slug-input" type="text" name="slug" placeholder="slug, e.g. runbooks/deploy" autofocus>{{end}}
       <textarea name="content" spellcheck="false">{{.Content}}</textarea>
       <div class="editor-actions">
         <button class="btn btn-approve" type="submit">Save</button>
-        <a class="btn btn-reject" href="{{if .Slug}}/wiki/{{.Slug}}{{else}}/{{end}}">Cancel</a>
+        <a class="btn btn-reject" href="{{$.Chrome.Base}}{{if .Slug}}/wiki/{{.Slug}}{{else}}/{{end}}">Cancel</a>
         <label class="btn btn-ghost">Insert image<input id="imgfile" type="file" accept="image/png,image/jpeg,image/gif,image/webp,application/pdf" hidden></label>
         <span class="muted">paste an image to upload it</span>
       </div>
@@ -39,7 +39,7 @@
         async function upload(file) {
           var fd = new FormData();
           fd.append('file', file);
-          var r = await fetch('/upload', { method: 'POST', body: fd });
+          var r = await fetch('{{$.Chrome.Base}}/upload', { method: 'POST', body: fd });
           if (!r.ok) { alert('Upload failed: ' + (await r.text())); return; }
           var j = await r.json();
           insert('![' + file.name + '](' + j.url + ')\n');

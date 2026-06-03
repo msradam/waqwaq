@@ -80,32 +80,59 @@ type Server struct {
 	title     string
 	accent    string
 	theme     string
-	customCSS string // path to .waqwaq/custom.css, or "" if absent
+	customCSS string    // path to .waqwaq/custom.css, or "" if absent
+	base      string    // URL base path: "" single-wiki, "/w/<name>" in farm mode
+	wikis     []WikiRef // all wikis, for the farm switcher (empty when single)
 }
 
-func New(st *store.Store, rnd *render.Renderer, mcpSrv *mcp.Server, reg *auth.Registry, q *review.Queue, searcher search.Searcher, rules lint.Rules, web WebPolicy, readOnly bool, site Site) (*Server, error) {
+// WikiRef identifies a wiki for the farm switcher.
+type WikiRef struct {
+	Name    string
+	Base    string
+	Current bool
+}
+
+type Options struct {
+	Store    *store.Store
+	Renderer *render.Renderer
+	MCP      *mcp.Server
+	Auth     *auth.Registry
+	Queue    *review.Queue
+	Search   search.Searcher
+	Rules    lint.Rules
+	Web      WebPolicy
+	ReadOnly bool
+	Site     Site
+	Base     string
+	Wikis    []WikiRef
+}
+
+func New(o Options) (*Server, error) {
 	tmpl, err := template.ParseFS(assets, "web/templates/*.html")
 	if err != nil {
 		return nil, err
 	}
-	title := site.Title
+	title := o.Site.Title
 	if title == "" {
 		title = "Waqwaq"
 	}
-	theme := site.Theme
+	theme := o.Site.Theme
 	if theme == "" {
 		theme = "auto"
 	}
-	custom := filepath.Join(st.Root(), ".waqwaq", "custom.css")
+	custom := filepath.Join(o.Store.Root(), ".waqwaq", "custom.css")
 	if _, err := os.Stat(custom); err != nil {
 		custom = ""
 	}
+	searcher := o.Search
 	if searcher == nil {
-		searcher = st
+		searcher = o.Store
 	}
 	return &Server{
-		store: st, renderer: rnd, tmpl: tmpl, mcp: mcpSrv, auth: reg, queue: q, search: searcher, rules: rules, web: web, readOnly: readOnly,
-		title: title, accent: site.Accent, theme: theme, customCSS: custom,
+		store: o.Store, renderer: o.Renderer, tmpl: tmpl, mcp: o.MCP, auth: o.Auth, queue: o.Queue,
+		search: searcher, rules: o.Rules, web: o.Web, readOnly: o.ReadOnly,
+		title: title, accent: o.Site.Accent, theme: theme, customCSS: custom,
+		base: o.Base, wikis: o.Wikis,
 	}, nil
 }
 
@@ -239,15 +266,18 @@ type chrome struct {
 	Accent    string
 	Theme     string
 	CustomCSS bool
+	Base      string
+	Wikis     []WikiRef
 }
 
 func (s *Server) chrome(r *http.Request, active, query string) chrome {
 	pages, _ := s.store.List()
 	pending, _ := s.queue.PendingCount()
 	return chrome{
-		Nav: buildNav(pages, active), Pending: pending, Query: query, Active: active,
+		Nav: buildNav(pages, active, s.base), Pending: pending, Query: query, Active: active,
 		ReadOnly: s.readOnly, CanEdit: !s.readOnly && s.role(r) >= RoleEditor,
 		SiteTitle: s.title, Accent: s.accent, Theme: s.theme, CustomCSS: s.customCSS != "",
+		Base: s.base, Wikis: s.wikis,
 	}
 }
 
@@ -258,12 +288,13 @@ type navNode struct {
 	Path     string
 	Slug     string
 	Title    string
+	Base     string
 	Children []*navNode
 	Open     bool
 	Active   bool
 }
 
-func buildNav(metas []store.PageMeta, active string) []*navNode {
+func buildNav(metas []store.PageMeta, active, base string) []*navNode {
 	root := &navNode{}
 	for _, m := range metas {
 		cur := root
@@ -277,7 +308,7 @@ func buildNav(metas []store.PageMeta, active string) []*navNode {
 			}
 			child := childByName(cur, part)
 			if child == nil {
-				child = &navNode{Name: part, Path: path}
+				child = &navNode{Name: part, Path: path, Base: base}
 				cur.Children = append(cur.Children, child)
 			}
 			if i == len(parts)-1 {
@@ -333,7 +364,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"url": "/assets/" + name})
+	_ = json.NewEncoder(w).Encode(map[string]string{"url": s.base + "/assets/" + name})
 }
 
 func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
@@ -477,7 +508,7 @@ func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		http.Redirect(w, r, "/wiki/"+slug, http.StatusSeeOther)
+		http.Redirect(w, r, s.base+"/wiki/"+slug, http.StatusSeeOther)
 		return
 	}
 
@@ -665,7 +696,7 @@ func (s *Server) handleProposal(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		http.Redirect(w, r, "/proposals", http.StatusSeeOther)
+		http.Redirect(w, r, s.base+"/proposals", http.StatusSeeOther)
 		return
 	}
 

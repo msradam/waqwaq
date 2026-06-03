@@ -10,14 +10,14 @@
 <div class="layout">
   {{template "sidebar" .Chrome}}
   <main class="content">
-    <p class="muted"><a href="/wiki/{{.Slug}}">← {{.Title}}</a></p>
+    <p class="muted"><a href="{{$.Chrome.Base}}/wiki/{{.Slug}}">← {{.Title}}</a></p>
     <h1>History</h1>
     {{if .Revisions}}
     <table class="history">
       <tbody>
       {{range .Revisions}}
         <tr>
-          <td><a href="/diff/{{$.Slug}}?rev={{.Hash}}"><code>{{.Hash}}</code></a></td>
+          <td><a href="{{$.Chrome.Base}}/diff/{{$.Slug}}?rev={{.Hash}}"><code>{{.Hash}}</code></a></td>
           <td>{{.Message}}</td>
           <td>{{.Author}}</td>
           <td class="muted">{{.When.Format "2006-01-02"}}</td>

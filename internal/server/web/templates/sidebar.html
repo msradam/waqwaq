@@ -1,23 +1,28 @@
 {{define "headlinks"}}
 <meta name="color-scheme" content="light dark">
-<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" type="image/svg+xml" href="{{.Base}}/static/favicon.svg">
+<link rel="stylesheet" href="{{.Base}}/static/style.css">
 {{if .Accent}}<style>:root{ --accent: {{.Accent}}; }</style>{{end}}
-{{if .CustomCSS}}<link rel="stylesheet" href="/custom.css">{{end}}
+{{if .CustomCSS}}<link rel="stylesheet" href="{{.Base}}/custom.css">{{end}}
 {{end}}
 
-{{define "navtree"}}{{range .}}{{if .Children}}<details class="nav-folder"{{if .Open}} open{{end}}><summary>{{if .Slug}}<a href="/wiki/{{.Slug}}"{{if .Active}} class="active"{{end}}>{{.Title}}</a>{{else}}{{.Name}}{{end}}</summary><div class="nav-children">{{template "navtree" .Children}}</div></details>{{else}}<a class="nav-link{{if .Active}} active{{end}}" href="/wiki/{{.Slug}}">{{.Title}}</a>{{end}}{{end}}{{end}}
+{{define "navtree"}}{{range .}}{{if .Children}}<details class="nav-folder"{{if .Open}} open{{end}}><summary>{{if .Slug}}<a href="{{.Base}}/wiki/{{.Slug}}"{{if .Active}} class="active"{{end}}>{{.Title}}</a>{{else}}{{.Name}}{{end}}</summary><div class="nav-children">{{template "navtree" .Children}}</div></details>{{else}}<a class="nav-link{{if .Active}} active{{end}}" href="{{.Base}}/wiki/{{.Slug}}">{{.Title}}</a>{{end}}{{end}}{{end}}
 
 {{define "sidebar"}}
 <aside class="sidebar">
-  <a class="brand" href="/">🌳 {{.SiteTitle}}</a>
-  <form class="search" action="/search" method="get" role="search">
+  <a class="brand" href="{{.Base}}/">🌳 {{.SiteTitle}}</a>
+  {{if .Wikis}}
+  <div class="switcher">
+    {{range .Wikis}}<a class="nav-link{{if eq .Base $.Base}} active{{end}}" href="{{.Base}}/">{{.Name}}</a>{{end}}
+  </div>
+  {{end}}
+  <form class="search" action="{{.Base}}/search" method="get" role="search">
     <input type="search" name="q" placeholder="Search…" value="{{.Query}}" aria-label="Search">
   </form>
-  <a class="nav-link section{{if eq .Active "proposals"}} active{{end}}" href="/proposals">Proposals{{if .Pending}} <span class="badge">{{.Pending}}</span>{{end}}</a>
-  <a class="nav-link section{{if eq .Active "health"}} active{{end}}" href="/health">Canopy</a>
-  <a class="nav-link section{{if eq .Active "tags"}} active{{end}}" href="/tags">Tags</a>
-  {{if .CanEdit}}<a class="nav-link section" href="/edit/">+ New page</a>{{end}}
+  <a class="nav-link section{{if eq .Active "proposals"}} active{{end}}" href="{{.Base}}/proposals">Proposals{{if .Pending}} <span class="badge">{{.Pending}}</span>{{end}}</a>
+  <a class="nav-link section{{if eq .Active "health"}} active{{end}}" href="{{.Base}}/health">Canopy</a>
+  <a class="nav-link section{{if eq .Active "tags"}} active{{end}}" href="{{.Base}}/tags">Tags</a>
+  {{if .CanEdit}}<a class="nav-link section" href="{{.Base}}/edit/">+ New page</a>{{end}}
   <nav>
     {{if .Nav}}{{template "navtree" .Nav}}{{else}}<span class="muted">No pages yet.</span>{{end}}
   </nav>

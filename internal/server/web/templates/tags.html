@@ -11,12 +11,12 @@
   {{template "sidebar" .Chrome}}
   <main class="content">
     {{if .Tag}}
-      <p class="muted"><a href="/tags">← Tags</a></p>
+      <p class="muted"><a href="{{$.Chrome.Base}}/tags">← Tags</a></p>
       <h1>🍃 {{.Tag}}</h1>
-      {{if .Pages}}<ul class="results">{{range .Pages}}<li><a href="/wiki/{{.Slug}}">{{.Title}}</a></li>{{end}}</ul>{{else}}<p class="muted">No pages carry this tag.</p>{{end}}
+      {{if .Pages}}<ul class="results">{{range .Pages}}<li><a href="{{$.Chrome.Base}}/wiki/{{.Slug}}">{{.Title}}</a></li>{{end}}</ul>{{else}}<p class="muted">No pages carry this tag.</p>{{end}}
     {{else}}
       <h1>Tags</h1>
-      {{if .Tags}}<div class="tagcloud">{{range .Tags}}<a class="tag" href="/tags/{{.Tag}}">🍃 {{.Tag}} <span class="muted">{{.Count}}</span></a>{{end}}</div>{{else}}<p class="muted">No tags yet. Add a <code>tags:</code> field to a page's frontmatter.</p>{{end}}
+      {{if .Tags}}<div class="tagcloud">{{range .Tags}}<a class="tag" href="{{$.Chrome.Base}}/tags/{{.Tag}}">🍃 {{.Tag}} <span class="muted">{{.Count}}</span></a>{{end}}</div>{{else}}<p class="muted">No tags yet. Add a <code>tags:</code> field to a page's frontmatter.</p>{{end}}
     {{end}}
   </main>
 </div>

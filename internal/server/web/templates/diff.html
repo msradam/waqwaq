@@ -10,9 +10,9 @@
 <div class="layout">
   {{template "sidebar" .Chrome}}
   <main class="content">
-    <p class="muted"><a href="/history/{{.Slug}}">← History</a></p>
+    <p class="muted"><a href="{{$.Chrome.Base}}/history/{{.Slug}}">← History</a></p>
     <h1>Changes in <code>{{.Rev}}</code></h1>
-    <p class="muted"><a href="/wiki/{{.Slug}}">{{.Slug}}</a></p>
+    <p class="muted"><a href="{{$.Chrome.Base}}/wiki/{{.Slug}}">{{.Slug}}</a></p>
     {{if .Diff}}
     <pre class="diff">{{range .Diff}}<span class="diff-{{.Op}}">{{if eq .Op "add"}}+ {{else if eq .Op "del"}}- {{else}}  {{end}}{{.Text}}</span>
 {{end}}</pre>

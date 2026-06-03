@@ -156,6 +156,16 @@ waqwaq export ./wiki ./site
 
 Serve the output directory with any static file server.
 
+### Multiple wikis
+
+Pass more than one directory and each is served as a separate wiki under a path prefix:
+
+```bash
+waqwaq serve ~/kb/platform ~/kb/security
+```
+
+`/` lists the wikis, `/w/platform/` and `/w/security/` serve them, and each has its own MCP endpoint at `/w/<name>/mcp`. Every wiki keeps its own git repo, search index, review queue, config, and `.waqwaq/tokens.json`, so access is scoped per wiki: a token issued for one wiki is not accepted by another, and pages cannot cross between roots. A single directory still serves at the root unchanged. Put a reverse proxy in front for TLS.
+
 ## Configuration
 
 `waqwaq serve [dir]` accepts:

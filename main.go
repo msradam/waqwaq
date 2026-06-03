@@ -76,88 +76,88 @@ func cmdServe(args []string) {
 	tokensPath := fs.String("tokens", "", "path to a JSON tokens file (default <dir>/.waqwaq/tokens.json)")
 	rest := parseArgs(fs, args)
 
-	dir := "."
-	if len(rest) > 0 {
-		dir = rest[0]
-	}
-
-	st, err := store.New(dir)
-	if err != nil {
-		log.Fatalf("store: %v", err)
-	}
-
-	tp := *tokensPath
-	if tp == "" {
-		if env := os.Getenv("WAQWAQ_TOKENS"); env != "" {
-			tp = env
-		} else {
-			tp = filepath.Join(st.Root(), ".waqwaq", "tokens.json")
-		}
-	}
-	reg, err := auth.Load(tp)
-	if err != nil {
-		log.Fatalf("tokens: %v", err)
-	}
-	cfg, err := config.Load(filepath.Join(st.Root(), ".waqwaq", "config.json"))
-	if err != nil {
-		log.Fatalf("config: %v", err)
+	dirs := rest
+	if len(dirs) == 0 {
+		dirs = []string{"."}
 	}
 	setFlags := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
-	if !setFlags["addr"] && cfg.Addr != "" {
-		*addr = cfg.Addr
-	}
-	if !setFlags["review"] && cfg.Review {
-		*forceReview = true
-	}
 
-	q, err := review.New(st, cfg.Webhook)
-	if err != nil {
-		log.Fatalf("review: %v", err)
-	}
+	var handler http.Handler
+	if len(dirs) == 1 {
+		tp := *tokensPath
+		if tp == "" {
+			tp = os.Getenv("WAQWAQ_TOKENS")
+		}
+		srv, cleanup, cfg, reg, err := buildWiki(dirs[0], "", *readOnly, *forceReview, tp, nil)
+		if err != nil {
+			log.Fatalf("serve: %v", err)
+		}
+		defer cleanup()
+		if !setFlags["addr"] && cfg.Addr != "" {
+			*addr = cfg.Addr
+		}
+		handler = srv.Handler()
 
-	var searcher search.Searcher = st
-	if idx, err := search.New(st); err != nil {
-		log.Printf("  search : FTS5 unavailable (%v); falling back to substring scan", err)
+		mode := "read-write"
+		if *readOnly {
+			mode = "read-only"
+		}
+		authMode := "open"
+		if reg.Enabled() {
+			authMode = "token"
+		}
+		policy := "direct commit"
+		switch {
+		case *forceReview || cfg.Review:
+			policy = "all writes to review queue"
+		case reg.Enabled():
+			policy = "trusted commit, others to review queue"
+		}
+		log.Printf("waqwaq %s  ·  %s  ·  %s", version, dirs[0], mode)
+		log.Printf("  web UI : http://%s/", *addr)
+		log.Printf("  MCP    : http://%s/mcp   (auth: %s, writes: %s)", *addr, authMode, policy)
+		if cfg.Web.ProxyHeader != "" {
+			log.Printf("  web auth: identity from proxy header %q", cfg.Web.ProxyHeader)
+		}
 	} else {
-		searcher = idx
-		defer idx.Close()
+		wikis := make([]server.WikiRef, len(dirs))
+		for i, d := range dirs {
+			name := filepath.Base(d)
+			wikis[i] = server.WikiRef{Name: name, Base: "/w/" + name}
+		}
+		mux := http.NewServeMux()
+		for i, d := range dirs {
+			srv, cleanup, _, _, err := buildWiki(d, wikis[i].Base, *readOnly, *forceReview, "", wikis)
+			if err != nil {
+				log.Fatalf("serve %s: %v", d, err)
+			}
+			defer cleanup()
+			mux.Handle(wikis[i].Base+"/", http.StripPrefix(wikis[i].Base, srv.Handler()))
+		}
+		if sfs, err := server.StaticFS(); err == nil {
+			mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(sfs))))
+		}
+		mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
+		landing := template.Must(template.New("landing").Parse(farmLandingHTML))
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/" {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_ = landing.Execute(w, wikis)
+		})
+		handler = mux
+
+		log.Printf("waqwaq %s  ·  farm of %d wikis", version, len(dirs))
+		log.Printf("  web UI : http://%s/", *addr)
+		for _, ww := range wikis {
+			log.Printf("  · %-16s http://%s%s/   (MCP at %s/mcp)", ww.Name, *addr, ww.Base, ww.Base)
+		}
 	}
 
-	mcpSrv := mcpserver.New(st, q, reg, mcpserver.Options{ReadOnly: *readOnly, ForceReview: *forceReview, Rules: cfg.Lint, Search: searcher})
-	srv, err := server.New(st, render.New(), mcpSrv, reg, q, searcher, cfg.Lint, server.WebPolicy{
-		ProxyHeader: cfg.Web.ProxyHeader, DefaultRole: cfg.Web.DefaultRole, Admins: cfg.Web.Admins, Editors: cfg.Web.Editors,
-	}, *readOnly, server.Site{
-		Title: cfg.Title, Accent: cfg.Accent, Theme: cfg.Theme,
-	})
-	if err != nil {
-		log.Fatalf("server: %v", err)
-	}
-
-	httpSrv := &http.Server{Addr: *addr, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
-
-	mode := "read-write"
-	if *readOnly {
-		mode = "read-only"
-	}
-	authMode := "open"
-	if reg.Enabled() {
-		authMode = "token"
-	}
-	policy := "direct commit"
-	switch {
-	case *forceReview:
-		policy = "all writes to review queue"
-	case reg.Enabled():
-		policy = "trusted commit, others to review queue"
-	}
-	log.Printf("waqwaq %s  ·  %s  ·  %s  ·  pages from %s", version, st.Root(), mode, st.Layout())
-	log.Printf("  web UI : http://%s/", *addr)
-	log.Printf("  MCP    : http://%s/mcp   (auth: %s, writes: %s)", *addr, authMode, policy)
-	if cfg.Web.ProxyHeader != "" {
-		log.Printf("  web auth: identity from proxy header %q", cfg.Web.ProxyHeader)
-	}
-
+	httpSrv := &http.Server{Addr: *addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("listen: %v", err)
@@ -171,6 +171,75 @@ func cmdServe(args []string) {
 	defer cancel()
 	_ = httpSrv.Shutdown(ctx)
 }
+
+// buildWiki assembles one wiki's full stack (store, auth, review queue, search
+// index, MCP server, web server) for a data directory. base is "" for a single
+// wiki at the root, or "/w/<name>" in farm mode. The returned cleanup closes the
+// search index.
+func buildWiki(dir, base string, readOnly, forceReview bool, tokensPath string, wikis []server.WikiRef) (*server.Server, func(), config.Config, *auth.Registry, error) {
+	cleanup := func() {}
+	st, err := store.New(dir)
+	if err != nil {
+		return nil, cleanup, config.Config{}, nil, err
+	}
+	tp := tokensPath
+	if tp == "" {
+		tp = filepath.Join(st.Root(), ".waqwaq", "tokens.json")
+	}
+	reg, err := auth.Load(tp)
+	if err != nil {
+		return nil, cleanup, config.Config{}, nil, err
+	}
+	cfg, err := config.Load(filepath.Join(st.Root(), ".waqwaq", "config.json"))
+	if err != nil {
+		return nil, cleanup, config.Config{}, nil, err
+	}
+	q, err := review.New(st, cfg.Webhook)
+	if err != nil {
+		return nil, cleanup, config.Config{}, nil, err
+	}
+	var searcher search.Searcher = st
+	if idx, err := search.New(st); err == nil {
+		searcher = idx
+		cleanup = func() { _ = idx.Close() }
+	}
+	queueAll := forceReview || cfg.Review
+	mcpSrv := mcpserver.New(st, q, reg, mcpserver.Options{ReadOnly: readOnly, ForceReview: queueAll, Rules: cfg.Lint, Search: searcher})
+	srv, err := server.New(server.Options{
+		Store: st, Renderer: render.New(), MCP: mcpSrv, Auth: reg, Queue: q, Search: searcher, Rules: cfg.Lint,
+		Web:      server.WebPolicy{ProxyHeader: cfg.Web.ProxyHeader, DefaultRole: cfg.Web.DefaultRole, Admins: cfg.Web.Admins, Editors: cfg.Web.Editors},
+		ReadOnly: readOnly,
+		Site:     server.Site{Title: cfg.Title, Accent: cfg.Accent, Theme: cfg.Theme},
+		Base:     base,
+		Wikis:    wikis,
+	})
+	if err != nil {
+		cleanup()
+		return nil, func() {}, config.Config{}, nil, err
+	}
+	return srv, cleanup, cfg, reg, nil
+}
+
+const farmLandingHTML = `<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Waqwaq</title>
+<meta name="color-scheme" content="light dark">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main class="content" style="max-width:600px;margin:60px auto">
+  <h1>🌳 Waqwaq</h1>
+  <p class="muted">Wikis on this server:</p>
+  <ul class="results">
+    {{range .}}<li><a href="{{.Base}}/">{{.Name}}</a></li>{{end}}
+  </ul>
+</main>
+</body>
+</html>`
 
 func cmdInit(args []string) {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)

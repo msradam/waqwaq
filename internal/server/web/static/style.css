@@ -108,6 +108,9 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .nav-link.active { background: var(--accent); color: #fff; }
 .nav-link.section { font-weight: 600; margin-bottom: 6px; }
 
+.switcher { display: flex; flex-direction: column; gap: 2px; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.switcher .nav-link { font-weight: 600; }
+
 .nav-folder { margin: 0; }
 .nav-folder > summary {
   list-style: none;
