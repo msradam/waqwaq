@@ -116,7 +116,12 @@ func (q *Queue) List() ([]*Proposal, error) {
 		}
 		ps = append(ps, p)
 	}
-	sort.Slice(ps, func(i, j int) bool { return ps[i].Created.After(ps[j].Created) })
+	sort.Slice(ps, func(i, j int) bool {
+		if pi, pj := ps[i].Status == Pending, ps[j].Status == Pending; pi != pj {
+			return pi // pending first
+		}
+		return ps[i].Created.After(ps[j].Created)
+	})
 	return ps, nil
 }
 

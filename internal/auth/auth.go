@@ -46,12 +46,24 @@ func Load(path string) (*Registry, error) {
 	}
 	r := &Registry{byToken: make(map[string]Principal, len(f.Tokens))}
 	for _, t := range f.Tokens {
-		if t.Token == "" || t.Name == "" {
+		name := sanitizeName(t.Name)
+		if t.Token == "" || name == "" {
 			continue
 		}
-		r.byToken[t.Token] = Principal{Name: t.Name, Trusted: t.Trusted}
+		r.byToken[t.Token] = Principal{Name: name, Trusted: t.Trusted}
 	}
 	return r, nil
+}
+
+// sanitizeName strips characters that could break a git --author "Name <email>"
+// argument. Token names are operator-configured, but this keeps attribution safe.
+func sanitizeName(name string) string {
+	return strings.TrimSpace(strings.Map(func(r rune) rune {
+		if r == '<' || r == '>' || r == '\n' || r == '\r' {
+			return -1
+		}
+		return r
+	}, name))
 }
 
 // Enabled reports whether any tokens are configured. When false the server runs

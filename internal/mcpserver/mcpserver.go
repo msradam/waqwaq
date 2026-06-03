@@ -46,7 +46,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 	}
 
 	s := mcp.NewServer(
-		&mcp.Implementation{Name: "waqwaq", Title: "Waqwaq wiki", Version: "0.1.0"},
+		&mcp.Implementation{Name: "waqwaq", Title: "Waqwaq wiki", Version: "0.2.0"},
 		&mcp.ServerOptions{Instructions: instructions},
 	)
 

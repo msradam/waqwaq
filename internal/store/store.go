@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -37,6 +38,7 @@ type Store struct {
 	pages   string // where .md pages live: gitRoot/wiki or gitRoot
 	raw     string // gitRoot/raw
 	git     bool
+	mu      sync.Mutex // serializes writes so concurrent commits cannot race on git
 }
 
 type PageMeta struct {
@@ -237,13 +239,23 @@ func (s *Store) Write(slug, content, author, message string) error {
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
 	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
 		return err
 	}
-	return s.commit(message, author)
+	rel, err := filepath.Rel(s.gitRoot, p)
+	if err != nil {
+		return err
+	}
+	paths := []string{rel}
+	if _, err := os.Stat(filepath.Join(s.gitRoot, ".gitignore")); err == nil {
+		paths = append(paths, ".gitignore")
+	}
+	return s.commit(message, author, paths...)
 }
 
 func (s *Store) Search(query string) ([]SearchHit, error) {
@@ -263,6 +275,9 @@ func (s *Store) Search(query string) ([]SearchHit, error) {
 		}
 		if strings.Contains(strings.ToLower(page.Title+"\n"+page.Body), needle) {
 			hits = append(hits, SearchHit{Slug: m.Slug, Title: m.Title, Snippet: snippet(page.Body, needle)})
+			if len(hits) >= 50 {
+				break
+			}
 		}
 	}
 	return hits, nil
@@ -370,11 +385,13 @@ func (s *Store) titleOf(path, slug string) string {
 	return filepath.Base(slug)
 }
 
-func (s *Store) commit(message, author string) error {
-	if !s.git {
+// commit stages only the given paths (relative to gitRoot) and commits them, so
+// a page write never sweeps in unrelated working-tree changes.
+func (s *Store) commit(message, author string, paths ...string) error {
+	if !s.git || len(paths) == 0 {
 		return nil
 	}
-	add := exec.Command("git", "add", "-A")
+	add := exec.Command("git", append([]string{"add", "--"}, paths...)...)
 	add.Dir = s.gitRoot
 	if err := add.Run(); err != nil {
 		return err
@@ -445,18 +462,29 @@ func SplitFrontmatter(raw string) (map[string]any, string) {
 	if !strings.HasPrefix(norm, "---\n") {
 		return nil, raw
 	}
-	idx := strings.Index(norm[4:], "\n---")
-	if idx < 0 {
-		return nil, raw
+	rest := norm[4:]
+	for i := 0; i < len(rest); {
+		nl := strings.IndexByte(rest[i:], '\n')
+		lineEnd := len(rest)
+		if nl >= 0 {
+			lineEnd = i + nl
+		}
+		if rest[i:lineEnd] == "---" { // closing fence must be a line that is exactly ---
+			var fm map[string]any
+			if err := yaml.Unmarshal([]byte(rest[:i]), &fm); err != nil {
+				return nil, raw
+			}
+			if nl < 0 {
+				return fm, ""
+			}
+			return fm, strings.TrimPrefix(rest[lineEnd+1:], "\n")
+		}
+		if nl < 0 {
+			break
+		}
+		i = lineEnd + 1
 	}
-	fmText := norm[4 : 4+idx]
-	body := strings.TrimPrefix(norm[4+idx+len("\n---"):], "\n")
-	body = strings.TrimPrefix(body, "\n")
-	var fm map[string]any
-	if err := yaml.Unmarshal([]byte(fmText), &fm); err != nil {
-		return nil, raw
-	}
-	return fm, body
+	return nil, raw
 }
 
 func snippet(body, needle string) string {

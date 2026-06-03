@@ -3,8 +3,22 @@ package store
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestFrontmatterBodyWithThematicBreak(t *testing.T) {
+	fm, body := SplitFrontmatter("---\ntitle: T\n---\n\nintro\n\n---\n\nmore\n")
+	if fm["title"] != "T" {
+		t.Fatalf("title = %v, want T", fm["title"])
+	}
+	if !strings.Contains(body, "---") {
+		t.Errorf("body lost its thematic break: %q", body)
+	}
+	if !strings.Contains(body, "more") {
+		t.Errorf("body was truncated: %q", body)
+	}
+}
 
 func TestSplitFrontmatter(t *testing.T) {
 	fm, body := SplitFrontmatter("---\ntitle: Hello\n---\n\n# Hi\n")

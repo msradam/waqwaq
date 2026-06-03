@@ -4,9 +4,11 @@
 package server
 
 import (
+	"bytes"
 	"fmt"
 	"html/template"
 	"io/fs"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -76,7 +78,11 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	staticFS, _ := fs.Sub(assets, "web/static")
-	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
+	fileServer := http.FileServer(http.FS(staticFS))
+	mux.Handle("/static/", http.StripPrefix("/static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		fileServer.ServeHTTP(w, r)
+	})))
 
 	mcpHandler := s.authWrap(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s.mcp }, nil))
 	mux.Handle("/mcp", mcpHandler)
@@ -90,6 +96,24 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/wiki/", s.handlePage)
 	mux.HandleFunc("/", s.handleIndex)
 	return mux
+}
+
+// canReview reports whether a request may approve or reject proposals. Local
+// (loopback) requests always may, matching the trusted-operator model; remote
+// requests need a trusted token, and only when tokens are configured. This keeps
+// the privileged merge action from being open to the network when the server is
+// bound to a public interface.
+func (s *Server) canReview(r *http.Request) bool {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+			return true
+		}
+	}
+	if !s.auth.Enabled() {
+		return false
+	}
+	p, ok := s.auth.Resolve(r.Header.Get("Authorization"))
+	return ok && p.Trusted
 }
 
 // authWrap rejects MCP requests that lack a valid bearer token, but only when
@@ -235,7 +259,7 @@ func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 	slug := strings.TrimPrefix(r.URL.Path, "/wiki/")
 	page, err := s.store.Read(slug)
 	if err != nil {
-		http.Error(w, "page not found: "+slug, http.StatusNotFound)
+		s.notFound(w, slug)
 		return
 	}
 	s.renderPage(w, page)
@@ -317,6 +341,10 @@ func (s *Server) handleProposal(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "server is read-only", http.StatusForbidden)
 			return
 		}
+		if !s.canReview(r) {
+			http.Error(w, "review actions require local access or a trusted token", http.StatusForbidden)
+			return
+		}
 		var err error
 		switch r.FormValue("action") {
 		case "approve":
@@ -354,10 +382,27 @@ func (s *Server) handleProposal(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) exec(w http.ResponseWriter, name string, data any) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.tmpl.ExecuteTemplate(w, name, data); err != nil {
+	s.execStatus(w, http.StatusOK, name, data)
+}
+
+// execStatus renders to a buffer first, so a template error becomes a clean 500
+// instead of a half-written page, and a non-200 status can be set before output.
+func (s *Server) execStatus(w http.ResponseWriter, status int, name string, data any) {
+	var buf bytes.Buffer
+	if err := s.tmpl.ExecuteTemplate(&buf, name, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = buf.WriteTo(w)
+}
+
+func (s *Server) notFound(w http.ResponseWriter, slug string) {
+	msg := template.HTML("<h1>Page not found</h1><p class=\"muted\">There is no page at <code>" +
+		template.HTMLEscapeString(slug) +
+		"</code>. Pick a page from the sidebar, or create it with the <code>wiki_write</code> MCP tool.</p>")
+	s.execStatus(w, http.StatusNotFound, "page.html", pageView{Chrome: s.chrome("", ""), Title: "Not found", Content: msg})
 }
 
 type diffLine struct {

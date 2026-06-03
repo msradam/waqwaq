@@ -131,7 +131,7 @@ When a tokens file is present, the MCP endpoint requires `Authorization: Bearer 
 
 Pending proposals appear at `/proposals` in the web UI, each with a line diff and Approve or Reject buttons. Approving writes the page and commits it, recording the proposer as the git author and the approver in the commit message. The `tokens.json` and `proposals/` entries under `.waqwaq/` are kept out of the wiki's git history; the settings below are versioned with the wiki.
 
-The web UI is unauthenticated and assumes a local, trusted operator. Do not expose it to an untrusted network.
+The web UI assumes a local, trusted operator. Browsing and search are unauthenticated, while approving or rejecting proposals is allowed only from a loopback connection or with a trusted token, so the merge action stays closed when the server is bound to a public interface. Do not expose the read UI to a network whose users should not see the wiki.
 
 ### Appearance and tuning
 
