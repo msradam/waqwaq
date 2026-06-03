@@ -39,6 +39,12 @@ type Store struct {
 	raw     string // gitRoot/raw
 	git     bool
 	mu      sync.Mutex // serializes writes so concurrent commits cannot race on git
+
+	graphMu     sync.Mutex // guards the link-graph cache below
+	graphSig    string
+	graphMetas  []PageMeta
+	graphEdges  []GraphEdge
+	graphBroken []BrokenLink
 }
 
 type PageMeta struct {
@@ -285,35 +291,8 @@ func (s *Store) Search(query string) ([]SearchHit, error) {
 
 // Graph returns the pages and the resolved [[wikilink]] edges between them.
 func (s *Store) Graph() ([]PageMeta, []GraphEdge, error) {
-	metas, err := s.List()
-	if err != nil {
-		return nil, nil, err
-	}
-	known := make(map[string]bool, len(metas))
-	for _, m := range metas {
-		known[m.Slug] = true
-	}
-	var edges []GraphEdge
-	for _, m := range metas {
-		page, err := s.Read(m.Slug)
-		if err != nil {
-			continue
-		}
-		seen := map[string]bool{}
-		for _, match := range wikiLinkRe.FindAllStringSubmatch(page.Body, -1) {
-			target := match[1]
-			if i := strings.IndexAny(target, "|#"); i >= 0 {
-				target = target[:i]
-			}
-			target = strings.TrimSpace(target)
-			if target == "" || seen[target] || !known[target] {
-				continue
-			}
-			seen[target] = true
-			edges = append(edges, GraphEdge{From: m.Slug, To: target})
-		}
-	}
-	return metas, edges, nil
+	metas, edges, _, err := s.graphData()
+	return metas, edges, err
 }
 
 // Instructions returns the contents of CLAUDE.md at the wiki root, if present.

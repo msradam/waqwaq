@@ -1,7 +1,11 @@
 package review
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/msradam/waqwaq/internal/store"
 )
@@ -12,11 +16,41 @@ func newQueue(t *testing.T) (*Queue, *store.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	q, err := New(st)
+	q, err := New(st, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	return q, st
+}
+
+func TestWebhookFiresOnCreate(t *testing.T) {
+	got := make(chan map[string]any, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		got <- body
+	}))
+	defer srv.Close()
+
+	st, err := store.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err := New(st, srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.Create("foo", "---\ntitle: Foo\n---\n", "ci-bot", nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case body := <-got:
+		if body["slug"] != "foo" || body["event"] != "proposal.created" || body["author"] != "ci-bot" {
+			t.Fatalf("unexpected webhook payload: %+v", body)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("webhook was not received")
+	}
 }
 
 func TestCreateThenMergeWritesPage(t *testing.T) {

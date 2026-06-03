@@ -19,9 +19,16 @@
       </ul>
     {{else}}
       <article class="markdown">{{.Content}}</article>
-      {{if .Attribution}}
+      {{if .Tags}}<div class="tags">{{range .Tags}}<a class="tag" href="/tags/{{.}}">🍃 {{.}}</a>{{end}}</div>{{end}}
+      {{if .Backlinks}}
+      <section class="backlinks">
+        <h2>Referenced by</h2>
+        <ul>{{range .Backlinks}}<li><a href="/wiki/{{.Slug}}">{{.Title}}</a></li>{{end}}</ul>
+      </section>
+      {{end}}
+      {{if .Slug}}
       <footer class="attribution">
-        Last touched by <strong>{{.Attribution.Author}}</strong>{{if .Attribution.Approver}}, approved by <strong>{{.Attribution.Approver}}</strong>{{end}}{{if .Attribution.When}} · {{.Attribution.When}}{{end}}
+        {{if .Attribution}}Last touched by <strong>{{.Attribution.Author}}</strong>{{if .Attribution.Approver}}, approved by <strong>{{.Attribution.Approver}}</strong>{{end}}{{if .Attribution.When}} · {{.Attribution.When}}{{end}} · {{end}}<a href="/history/{{.Slug}}">history</a>
       </footer>
       {{end}}
     {{end}}

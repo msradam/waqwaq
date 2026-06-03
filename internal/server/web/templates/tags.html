@@ -1,0 +1,24 @@
+{{define "tags.html"}}<!doctype html>
+<html lang="en" data-theme="{{.Chrome.Theme}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{if .Tag}}{{.Tag}}{{else}}Tags{{end}} · {{.Chrome.SiteTitle}}</title>
+{{template "headlinks" .Chrome}}
+</head>
+<body>
+<div class="layout">
+  {{template "sidebar" .Chrome}}
+  <main class="content">
+    {{if .Tag}}
+      <p class="muted"><a href="/tags">← Tags</a></p>
+      <h1>🍃 {{.Tag}}</h1>
+      {{if .Pages}}<ul class="results">{{range .Pages}}<li><a href="/wiki/{{.Slug}}">{{.Title}}</a></li>{{end}}</ul>{{else}}<p class="muted">No pages carry this tag.</p>{{end}}
+    {{else}}
+      <h1>Tags</h1>
+      {{if .Tags}}<div class="tagcloud">{{range .Tags}}<a class="tag" href="/tags/{{.Tag}}">🍃 {{.Tag}} <span class="muted">{{.Count}}</span></a>{{end}}</div>{{else}}<p class="muted">No tags yet. Add a <code>tags:</code> field to a page's frontmatter.</p>{{end}}
+    {{end}}
+  </main>
+</div>
+</body>
+</html>{{end}}

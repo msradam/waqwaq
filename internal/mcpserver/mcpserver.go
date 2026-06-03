@@ -7,6 +7,7 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -20,6 +21,7 @@ import (
 const baseInstructions = `This is a Waqwaq wiki: git-backed markdown pages that humans browse and agents maintain.
 
 Read with wiki_list, wiki_read, wiki_search, and wiki_graph (the page link graph).
+Maintain the wiki with wiki_health (orphans, broken links, stale pages), wiki_recent (recent changes), wiki_backlinks, wiki_history, and wiki_tags. Use wiki_health to find what needs fixing.
 Raw documents to synthesise from live under raw/: list them with wiki_list_raw, read with wiki_read_raw, add with wiki_ingest.
 Create or replace pages with wiki_write. Each page needs YAML frontmatter with a title, and links other pages with [[slug]] or [[slug|label]] wikilinks.
 wiki_lint dry-runs the checks. A missing title blocks a write; unresolved wikilinks are warnings.
@@ -206,6 +208,111 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 				ID: p.ID, Slug: p.Slug, Title: p.Title, Author: p.Author,
 				Status: string(p.Status), Stale: q.Stale(p), Created: p.Created.Format("2006-01-02T15:04:05Z"),
 			})
+		}
+		return nil, out, nil
+	})
+
+	type slugIn struct {
+		Slug string `json:"slug" jsonschema:"slug of the page"`
+	}
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "wiki_backlinks",
+		Description: "List the pages that link to a given page.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in slugIn) (*mcp.CallToolResult, listOut, error) {
+		metas, err := st.Backlinks(in.Slug)
+		if err != nil {
+			return nil, listOut{}, err
+		}
+		out := listOut{}
+		for _, m := range metas {
+			out.Pages = append(out.Pages, pageRef{Slug: m.Slug, Title: m.Title})
+		}
+		return nil, out, nil
+	})
+
+	type healthOut struct {
+		Orphans []pageRef          `json:"orphans"`
+		Broken  []store.BrokenLink `json:"broken"`
+		Stale   []store.StalePage  `json:"stale"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "wiki_health",
+		Description: "Find pages that need attention: orphans (no incoming links), broken wikilinks, and stale pages (untouched for 90+ days). Use this to decide what to fix.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, healthOut, error) {
+		h, err := st.Health()
+		if err != nil {
+			return nil, healthOut{}, err
+		}
+		out := healthOut{Broken: h.Broken, Stale: h.Stale}
+		for _, o := range h.Orphans {
+			out.Orphans = append(out.Orphans, pageRef{Slug: o.Slug, Title: o.Title})
+		}
+		return nil, out, nil
+	})
+
+	type recentIn struct {
+		Limit int `json:"limit,omitempty" jsonschema:"maximum number of changes to return (default 20)"`
+	}
+	type recentOut struct {
+		Changes []store.Change `json:"changes"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "wiki_recent",
+		Description: "List recently changed pages, newest first.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in recentIn) (*mcp.CallToolResult, recentOut, error) {
+		limit := in.Limit
+		if limit <= 0 {
+			limit = 20
+		}
+		changes, err := st.Recent(limit)
+		if err != nil {
+			return nil, recentOut{}, err
+		}
+		return nil, recentOut{Changes: changes}, nil
+	})
+
+	type historyOut struct {
+		Revisions []store.Revision `json:"revisions"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "wiki_history",
+		Description: "List the git revisions of a page, newest first.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in slugIn) (*mcp.CallToolResult, historyOut, error) {
+		revs, err := st.History(in.Slug)
+		if err != nil {
+			return nil, historyOut{}, err
+		}
+		return nil, historyOut{Revisions: revs}, nil
+	})
+
+	type tagGroup struct {
+		Tag   string    `json:"tag"`
+		Pages []pageRef `json:"pages"`
+	}
+	type tagsOut struct {
+		Tags []tagGroup `json:"tags"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "wiki_tags",
+		Description: "List every tag and the pages that carry it.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, tagsOut, error) {
+		tags, err := st.Tags()
+		if err != nil {
+			return nil, tagsOut{}, err
+		}
+		names := make([]string, 0, len(tags))
+		for name := range tags {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		out := tagsOut{}
+		for _, name := range names {
+			g := tagGroup{Tag: name}
+			for _, m := range tags[name] {
+				g.Pages = append(g.Pages, pageRef{Slug: m.Slug, Title: m.Title})
+			}
+			out.Tags = append(out.Tags, g)
 		}
 		return nil, out, nil
 	})

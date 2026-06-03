@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -92,6 +93,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/custom.css", s.handleCustomCSS)
 	mux.HandleFunc("/proposals/", s.handleProposal)
 	mux.HandleFunc("/proposals", s.handleProposals)
+	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/tags/", s.handleTags)
+	mux.HandleFunc("/tags", s.handleTags)
+	mux.HandleFunc("/history/", s.handleHistory)
 	mux.HandleFunc("/search", s.handleSearch)
 	mux.HandleFunc("/wiki/", s.handlePage)
 	mux.HandleFunc("/", s.handleIndex)
@@ -225,6 +230,8 @@ type pageView struct {
 	Content     template.HTML
 	Slug        string
 	TOC         []render.TOCEntry
+	Tags        []string
+	Backlinks   []store.PageMeta
 	Attribution *attributionView
 	IsSearch    bool
 	Query       string
@@ -285,7 +292,79 @@ func (s *Server) renderPage(w http.ResponseWriter, page *store.Page) {
 	if a, ok := s.store.LastTouched(page.Slug); ok {
 		attr = &attributionView{Author: a.Author, Approver: a.Approver, When: relativeTime(a.When)}
 	}
-	s.exec(w, "page.html", pageView{Chrome: s.chrome(page.Slug, ""), Title: page.Title, Content: html, Slug: page.Slug, TOC: toc, Attribution: attr})
+	backlinks, _ := s.store.Backlinks(page.Slug)
+	s.exec(w, "page.html", pageView{
+		Chrome: s.chrome(page.Slug, ""), Title: page.Title, Content: html, Slug: page.Slug,
+		TOC: toc, Tags: store.FrontmatterTags(page.Frontmatter), Backlinks: backlinks, Attribution: attr,
+	})
+}
+
+type healthView struct {
+	Chrome chrome
+	Health *store.Health
+	Recent []store.Change
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	h, err := s.store.Health()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	recent, _ := s.store.Recent(15)
+	s.exec(w, "health.html", healthView{Chrome: s.chrome("health", ""), Health: h, Recent: recent})
+}
+
+type tagCount struct {
+	Tag   string
+	Count int
+}
+
+type tagsView struct {
+	Chrome chrome
+	Tag    string
+	Tags   []tagCount
+	Pages  []store.PageMeta
+}
+
+func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
+	all, err := s.store.Tags()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if tag := strings.TrimPrefix(r.URL.Path, "/tags/"); tag != "" && tag != r.URL.Path {
+		s.exec(w, "tags.html", tagsView{Chrome: s.chrome("tags", ""), Tag: tag, Pages: all[tag]})
+		return
+	}
+	names := make([]string, 0, len(all))
+	for name := range all {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	counts := make([]tagCount, 0, len(names))
+	for _, name := range names {
+		counts = append(counts, tagCount{Tag: name, Count: len(all[name])})
+	}
+	s.exec(w, "tags.html", tagsView{Chrome: s.chrome("tags", ""), Tags: counts})
+}
+
+type historyView struct {
+	Chrome    chrome
+	Slug      string
+	Title     string
+	Revisions []store.Revision
+}
+
+func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	slug := strings.TrimPrefix(r.URL.Path, "/history/")
+	page, err := s.store.Read(slug)
+	if err != nil {
+		s.notFound(w, slug)
+		return
+	}
+	revs, _ := s.store.History(slug)
+	s.exec(w, "history.html", historyView{Chrome: s.chrome("", ""), Slug: slug, Title: page.Title, Revisions: revs})
 }
 
 func relativeTime(t time.Time) string {

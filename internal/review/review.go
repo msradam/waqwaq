@@ -6,12 +6,15 @@
 package review
 
 import (
+	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -48,18 +51,52 @@ type Proposal struct {
 }
 
 type Queue struct {
-	st  *store.Store
-	dir string
+	st      *store.Store
+	dir     string
+	webhook string
 }
 
 var idRe = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
 
-func New(st *store.Store) (*Queue, error) {
+func New(st *store.Store, webhook string) (*Queue, error) {
 	dir := filepath.Join(st.Root(), ".waqwaq", "proposals")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	return &Queue{st: st, dir: dir}, nil
+	return &Queue{st: st, dir: dir, webhook: webhook}, nil
+}
+
+// notify posts a proposal event to the configured webhook, including a Slack
+// compatible text field. It runs in the background so it never blocks a write.
+func (q *Queue) notify(p *Proposal) {
+	if q.webhook == "" {
+		return
+	}
+	payload, err := json.Marshal(map[string]any{
+		"event":  "proposal.created",
+		"id":     p.ID,
+		"slug":   p.Slug,
+		"title":  p.Title,
+		"author": p.Author,
+		"text":   fmt.Sprintf("Waqwaq: %s proposed a change to %q (%s). Review it at /proposals/%s", p.Author, p.Title, p.Slug, p.ID),
+	})
+	if err != nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, q.webhook, bytes.NewReader(payload))
+		if err != nil {
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return
+		}
+		_ = resp.Body.Close()
+	}()
 }
 
 // Create records a pending proposal for a page write.
@@ -97,6 +134,7 @@ func (q *Queue) Create(slug, content, author string, issues []lint.Issue) (*Prop
 	if err := q.save(p); err != nil {
 		return nil, err
 	}
+	q.notify(p)
 	return p, nil
 }
 

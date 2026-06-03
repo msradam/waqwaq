@@ -1,0 +1,32 @@
+{{define "history.html"}}<!doctype html>
+<html lang="en" data-theme="{{.Chrome.Theme}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>History: {{.Title}} · {{.Chrome.SiteTitle}}</title>
+{{template "headlinks" .Chrome}}
+</head>
+<body>
+<div class="layout">
+  {{template "sidebar" .Chrome}}
+  <main class="content">
+    <p class="muted"><a href="/wiki/{{.Slug}}">← {{.Title}}</a></p>
+    <h1>History</h1>
+    {{if .Revisions}}
+    <table class="history">
+      <tbody>
+      {{range .Revisions}}
+        <tr>
+          <td class="muted"><code>{{.Hash}}</code></td>
+          <td>{{.Message}}</td>
+          <td>{{.Author}}</td>
+          <td class="muted">{{.When.Format "2006-01-02"}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+    {{else}}<p class="muted">No history for this page (the wiki is not tracked by git).</p>{{end}}
+  </main>
+</div>
+</body>
+</html>{{end}}

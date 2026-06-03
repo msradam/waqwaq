@@ -91,11 +91,6 @@ func cmdServe(args []string) {
 	if err != nil {
 		log.Fatalf("tokens: %v", err)
 	}
-	q, err := review.New(st)
-	if err != nil {
-		log.Fatalf("review: %v", err)
-	}
-
 	cfg, err := config.Load(filepath.Join(st.Root(), ".waqwaq", "config.json"))
 	if err != nil {
 		log.Fatalf("config: %v", err)
@@ -107,6 +102,11 @@ func cmdServe(args []string) {
 	}
 	if !setFlags["review"] && cfg.Review {
 		*forceReview = true
+	}
+
+	q, err := review.New(st, cfg.Webhook)
+	if err != nil {
+		log.Fatalf("review: %v", err)
 	}
 
 	var searcher search.Searcher = st

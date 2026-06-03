@@ -12,12 +12,13 @@ import (
 )
 
 type Config struct {
-	Title  string     `json:"title"`  // brand and page-title suffix
-	Accent string     `json:"accent"` // hex color for links and highlights
-	Theme  string     `json:"theme"`  // auto | light | dark
-	Addr   string     `json:"addr"`   // default listen address
-	Review bool       `json:"review"` // default to queuing writes for review
-	Lint   lint.Rules `json:"lint"`
+	Title   string     `json:"title"`   // brand and page-title suffix
+	Accent  string     `json:"accent"`  // hex color for links and highlights
+	Theme   string     `json:"theme"`   // auto | light | dark
+	Addr    string     `json:"addr"`    // default listen address
+	Review  bool       `json:"review"`  // default to queuing writes for review
+	Webhook string     `json:"webhook"` // URL notified when a write is queued for review
+	Lint    lint.Rules `json:"lint"`
 }
 
 func Default() Config {

@@ -10,6 +10,68 @@ Writes from agents pass through a lint step before they land. A page without a f
 
 The layout follows Andrej Karpathy's LLM wiki convention: pages under `wiki/`, raw source documents under `raw/`, and a `CLAUDE.md` schema at the root. If you point Waqwaq at a folder that has no `wiki/` subdirectory, it serves the folder itself, so an existing notes folder or Obsidian vault works without restructuring.
 
+## Quickstart
+
+From zero to an AI-maintained wiki in about two minutes.
+
+### 1. Install
+
+```bash
+go install github.com/msradam/waqwaq@latest
+```
+
+Or download a binary from the [releases page](https://github.com/msradam/waqwaq/releases).
+
+### 2. Create a wiki and serve it
+
+```bash
+waqwaq init mywiki
+waqwaq serve mywiki
+```
+
+Open `http://127.0.0.1:8000`. You have a browsable wiki with two sample pages, full-text search, and a Mermaid diagram on the home page.
+
+Already have notes? Skip `init` and point Waqwaq at any markdown folder or Obsidian vault:
+
+```bash
+waqwaq serve ~/notes
+```
+
+### 3. Connect an AI agent
+
+Create `.mcp.json` next to where you run Claude Code:
+
+```json
+{
+  "mcpServers": {
+    "waqwaq": {
+      "type": "http",
+      "url": "http://127.0.0.1:8000/mcp"
+    }
+  }
+}
+```
+
+Launch `claude`, run `/mcp`, and approve `waqwaq`. The agent now has the `wiki_*` tools.
+
+### 4. Have the agent read and write
+
+Ask Claude:
+
+> Read the wiki, then add a page documenting our deploy process and link it from the index.
+
+The page is written to disk, committed to git with the agent recorded as the author, and appears in the browser immediately. Lint runs first, so a page without a title is rejected before it lands.
+
+### 5. Add review (optional)
+
+Run with `--review`, and AI writes become proposals instead of commits:
+
+```bash
+waqwaq serve mywiki --review
+```
+
+Now the same request queues a proposal. Open `/proposals`, read the diff, and click Approve. The merge commit records who proposed the change and who approved it. That is the whole loop: humans browse, agents maintain, every change is reviewable markdown in git.
+
 ## Install
 
 With Go 1.26 or newer:
@@ -68,6 +130,7 @@ The MCP endpoint speaks streamable HTTP. To use it from Claude Code, add a proje
 The server exposes these tools:
 
 - `wiki_list`, `wiki_read`, `wiki_search`, `wiki_graph` read the wiki.
+- `wiki_health`, `wiki_recent`, `wiki_backlinks`, `wiki_history`, `wiki_tags` find what needs attention and navigate the wiki. Ask the agent to "fix the broken links" or "update the stalest runbooks" and it can use `wiki_health` to find them.
 - `wiki_list_raw`, `wiki_read_raw`, `wiki_ingest` work with raw documents under `raw/`.
 - `wiki_list_proposals` lists the review queue.
 - `wiki_lint` dry-runs the write checks.
@@ -98,7 +161,7 @@ Layout:
 - Raw documents live in `<dir>/raw`.
 - `<dir>/CLAUDE.md`, if present, is sent to MCP clients as the server instructions, so an agent reads the wiki's schema before it writes.
 
-Pages are markdown with optional YAML frontmatter. A `title` field sets the page title; without one, the first heading or the file name is used. Link between pages with `[[slug]]` or `[[slug|label]]` wikilinks. Fenced `mermaid` blocks render as diagrams, fenced code blocks are syntax highlighted, and `> [!NOTE]` or `> [!WARNING]` blockquotes render as callouts (the GitHub and Obsidian convention). Headings get anchor links and a right-rail table of contents, the sidebar groups pages into a collapsible tree, and each page footer shows who last touched it, including the proposer and approver for reviewed writes.
+Pages are markdown with optional YAML frontmatter. A `title` field sets the page title; without one, the first heading or the file name is used. Link between pages with `[[slug]]` or `[[slug|label]]` wikilinks. Fenced `mermaid` blocks render as diagrams, fenced code blocks are syntax highlighted, and `> [!NOTE]` or `> [!WARNING]` blockquotes render as callouts (the GitHub and Obsidian convention). Headings get anchor links and a right-rail table of contents, the sidebar groups pages into a collapsible tree, and each page footer shows who last touched it (including the proposer and approver for reviewed writes) with a link to its git history. Each page also lists the pages that reference it and its frontmatter `tags`, which are browsable at `/tags`. The `/health` view (the "Canopy") surfaces orphan pages, broken links, stale pages, and recent changes, the same data the `wiki_health` tool gives an agent.
 
 ### Review and access control
 
@@ -144,6 +207,7 @@ Optional settings live in `<dir>/.waqwaq/config.json`. Every field is optional, 
   "theme": "auto",
   "addr": "127.0.0.1:8000",
   "review": false,
+  "webhook": "https://hooks.slack.com/services/XXX",
   "lint": {
     "require_frontmatter": ["owner"],
     "banned_terms": [
@@ -157,6 +221,7 @@ Optional settings live in `<dir>/.waqwaq/config.json`. Every field is optional, 
 - `accent` is a CSS color for links and highlights.
 - `theme` is `auto` (follow the browser), `light`, or `dark`.
 - `addr` and `review` set defaults for the matching flags; an explicit flag still wins.
+- `webhook` is a URL that receives a JSON POST when a write is queued for review. The payload includes a Slack-compatible `text` field, so a Slack incoming webhook works directly.
 - `lint.require_frontmatter` lists frontmatter fields that must be present, in addition to the always-required `title`. A missing one blocks the write.
 - `lint.banned_terms` flags page bodies containing a term. `severity` is `warning` (default) or `error`, and an `error` blocks the write.
 
