@@ -76,7 +76,32 @@ func New(root string) (*Store, error) {
 		s.pages = abs
 	}
 	s.git = s.ensureGit()
+	s.ensureIgnore(".waqwaq/")
 	return s, nil
+}
+
+// ensureIgnore appends pattern to the wiki's .gitignore if absent, keeping the
+// .waqwaq/ control directory (tokens, pending proposals) out of git history.
+func (s *Store) ensureIgnore(pattern string) {
+	if !s.git {
+		return
+	}
+	path := filepath.Join(s.gitRoot, ".gitignore")
+	data, _ := os.ReadFile(path)
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == pattern {
+			return
+		}
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	if len(data) > 0 && !strings.HasSuffix(string(data), "\n") {
+		_, _ = f.WriteString("\n")
+	}
+	_, _ = f.WriteString(pattern + "\n")
 }
 
 func (s *Store) Root() string  { return s.gitRoot }

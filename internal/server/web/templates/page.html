@@ -8,16 +8,7 @@
 </head>
 <body>
 <div class="layout">
-  <aside class="sidebar">
-    <a class="brand" href="/">🌳 Waqwaq</a>
-    <form class="search" action="/search" method="get" role="search">
-      <input type="search" name="q" placeholder="Search…" value="{{.Query}}" aria-label="Search">
-    </form>
-    <nav>
-      {{range .Pages}}<a class="nav-link{{if eq .Slug $.Slug}} active{{end}}" href="/wiki/{{.Slug}}">{{.Title}}</a>
-      {{else}}<span class="muted">No pages yet.</span>{{end}}
-    </nav>
-  </aside>
+  {{template "sidebar" .Chrome}}
   <main class="content">
     {{if .IsSearch}}
       <h1>Search</h1>

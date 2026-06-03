@@ -112,6 +112,64 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .results a { color: var(--accent); text-decoration: none; font-weight: 600; }
 .snippet { margin: 4px 0 0; font-size: 14px; }
 
+.nav-link.section { font-weight: 600; margin-bottom: 6px; }
+.badge {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 10px;
+  padding: 0 7px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.proposals { border-collapse: collapse; width: 100%; max-width: var(--max); }
+.proposals th, .proposals td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.proposals th { font-size: 13px; color: var(--muted); font-weight: 600; }
+.proposals a { color: var(--accent); text-decoration: none; font-weight: 600; }
+
+.status { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 10px; text-transform: capitalize; }
+.status-pending { background: #fff3cd; color: #8a6d00; }
+.status-merged { background: #d1f0d6; color: #1a7f37; }
+.status-rejected { background: #f6d6d6; color: #b32424; }
+
+.warn {
+  background: #fff3cd;
+  border: 1px solid #f0e0a0;
+  color: #8a6d00;
+  padding: 10px 14px;
+  border-radius: 8px;
+  max-width: var(--max);
+}
+
+.lint { list-style: none; padding: 0; max-width: var(--max); }
+.lint li { padding: 6px 10px; border-radius: 6px; margin-bottom: 4px; font-size: 14px; }
+.lint-error { background: #f6d6d6; color: #b32424; }
+.lint-warning { background: #fff3cd; color: #8a6d00; }
+
+.diff {
+  max-width: var(--max);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre;
+}
+.diff span { display: block; }
+.diff-add { background: #e6ffec; color: #1a7f37; }
+.diff-del { background: #ffebe9; color: #b32424; }
+.diff-ctx { color: var(--fg); }
+
+.actions { display: flex; gap: 16px; align-items: flex-start; margin-top: 20px; flex-wrap: wrap; }
+.actions form { margin: 0; }
+.reject-form { display: flex; gap: 6px; }
+.reject-form input { padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
+.btn { border: none; border-radius: 6px; padding: 8px 16px; font-size: 14px; font-weight: 600; cursor: pointer; }
+.btn-approve { background: #1a7f37; color: #fff; }
+.btn-reject { background: #fff; color: #b32424; border: 1px solid #f0c0c0; }
+
 @media (max-width: 720px) {
   .layout { flex-direction: column; }
   .sidebar { width: auto; height: auto; position: static; }

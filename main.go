@@ -12,8 +12,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/msradam/waqwaq/internal/auth"
 	"github.com/msradam/waqwaq/internal/mcpserver"
 	"github.com/msradam/waqwaq/internal/render"
+	"github.com/msradam/waqwaq/internal/review"
 	"github.com/msradam/waqwaq/internal/server"
 	"github.com/msradam/waqwaq/internal/store"
 )
@@ -46,7 +48,8 @@ func usage() {
 
 usage:
   waqwaq init   [dir]                 scaffold a new wiki (wiki/ + raw/ + CLAUDE.md)
-  waqwaq serve  [dir] [--addr] [--read-only]   serve web UI + MCP over one port
+  waqwaq serve  [dir] [--addr] [--read-only] [--review] [--tokens FILE]
+                                      serve web UI + MCP over one port
   waqwaq ingest <dir> <file>...       add raw documents to the wiki's raw/ area
   waqwaq version
 
@@ -60,6 +63,8 @@ func cmdServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	addr := fs.String("addr", "127.0.0.1:8000", "address to listen on")
 	readOnly := fs.Bool("read-only", envBool("WAQWAQ_READ_ONLY"), "disable writes (AI and human)")
+	forceReview := fs.Bool("review", envBool("WAQWAQ_REVIEW"), "queue every write for human review")
+	tokensPath := fs.String("tokens", "", "path to a JSON tokens file (default <dir>/.waqwaq/tokens.json)")
 	rest := parseArgs(fs, args)
 
 	dir := "."
@@ -71,8 +76,26 @@ func cmdServe(args []string) {
 	if err != nil {
 		log.Fatalf("store: %v", err)
 	}
-	mcpSrv := mcpserver.New(st, *readOnly)
-	srv, err := server.New(st, render.New(), mcpSrv)
+
+	tp := *tokensPath
+	if tp == "" {
+		if env := os.Getenv("WAQWAQ_TOKENS"); env != "" {
+			tp = env
+		} else {
+			tp = filepath.Join(st.Root(), ".waqwaq", "tokens.json")
+		}
+	}
+	reg, err := auth.Load(tp)
+	if err != nil {
+		log.Fatalf("tokens: %v", err)
+	}
+	q, err := review.New(st)
+	if err != nil {
+		log.Fatalf("review: %v", err)
+	}
+
+	mcpSrv := mcpserver.New(st, q, reg, mcpserver.Options{ReadOnly: *readOnly, ForceReview: *forceReview})
+	srv, err := server.New(st, render.New(), mcpSrv, reg, q, *readOnly)
 	if err != nil {
 		log.Fatalf("server: %v", err)
 	}
@@ -83,9 +106,20 @@ func cmdServe(args []string) {
 	if *readOnly {
 		mode = "read-only"
 	}
+	authMode := "open"
+	if reg.Enabled() {
+		authMode = "token"
+	}
+	policy := "direct commit"
+	switch {
+	case *forceReview:
+		policy = "all writes to review queue"
+	case reg.Enabled():
+		policy = "trusted commit, others to review queue"
+	}
 	log.Printf("waqwaq %s  ·  %s  ·  %s  ·  pages from %s", version, st.Root(), mode, st.Layout())
 	log.Printf("  web UI : http://%s/", *addr)
-	log.Printf("  MCP    : http://%s/mcp   (streamable HTTP, add this URL to your MCP client)", *addr)
+	log.Printf("  MCP    : http://%s/mcp   (auth: %s, writes: %s)", *addr, authMode, policy)
 
 	go func() {
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -263,4 +297,5 @@ Raw documents to synthesise pages from live under ` + "`raw/`" + `.
 - Read with ` + "`wiki_list`" + `, ` + "`wiki_read`" + `, ` + "`wiki_search`" + `, ` + "`wiki_graph`" + `.
 - Add raw documents with ` + "`wiki_ingest`" + `; read them with ` + "`wiki_list_raw`" + ` and ` + "`wiki_read_raw`" + `.
 - Create or replace pages with ` + "`wiki_write`" + `. Lint runs first; a missing title blocks the write.
+- Depending on your access, a write either commits or is queued for review. Check the returned status and the queue with ` + "`wiki_list_proposals`" + `.
 `

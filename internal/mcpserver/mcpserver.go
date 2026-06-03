@@ -1,16 +1,18 @@
 // Package mcpserver exposes the wiki over MCP using the Karpathy wiki_* tool
-// convention: read tools always, write tools only when not in read-only mode.
-// Writes pass through lint before they land.
+// convention. Identity comes from the caller's bearer token: trusted principals
+// commit directly, others have their writes queued as proposals for human
+// review. Read tools are always available; write tools require read-write mode.
 package mcpserver
 
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/msradam/waqwaq/internal/auth"
 	"github.com/msradam/waqwaq/internal/lint"
+	"github.com/msradam/waqwaq/internal/review"
 	"github.com/msradam/waqwaq/internal/store"
 )
 
@@ -19,7 +21,13 @@ const baseInstructions = `This is a Waqwaq wiki: git-backed markdown pages that 
 Read with wiki_list, wiki_read, wiki_search, and wiki_graph (the page link graph).
 Raw documents to synthesise from live under raw/: list them with wiki_list_raw, read with wiki_read_raw, add with wiki_ingest.
 Create or replace pages with wiki_write. Each page needs YAML frontmatter with a title, and links other pages with [[slug]] or [[slug|label]] wikilinks.
-wiki_lint dry-runs the checks. A missing title blocks a write; unresolved wikilinks are warnings. Successful writes are committed to git.`
+wiki_lint dry-runs the checks. A missing title blocks a write; unresolved wikilinks are warnings.
+Depending on your access, a write either commits straight to git or is queued as a proposal for a human to approve. Check the status field returned by wiki_write, and list the queue with wiki_list_proposals.`
+
+type Options struct {
+	ReadOnly    bool
+	ForceReview bool
+}
 
 type noArgs struct{}
 
@@ -28,9 +36,9 @@ type pageRef struct {
 	Title string `json:"title"`
 }
 
-func New(st *store.Store, readOnly bool) *mcp.Server {
+func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mcp.Server {
 	instructions := baseInstructions
-	if schema := strings.TrimSpace(st.Instructions()); schema != "" {
+	if schema := st.Instructions(); schema != "" {
 		instructions += "\n\n--- wiki schema (CLAUDE.md) ---\n\n" + schema
 	}
 
@@ -164,24 +172,56 @@ func New(st *store.Store, readOnly bool) *mcp.Server {
 		return nil, lintOut{Issues: issues, OK: !lint.HasErrors(issues)}, nil
 	})
 
-	if readOnly {
+	type proposalRef struct {
+		ID      string `json:"id"`
+		Slug    string `json:"slug"`
+		Title   string `json:"title"`
+		Author  string `json:"author"`
+		Status  string `json:"status"`
+		Stale   bool   `json:"stale"`
+		Created string `json:"created"`
+	}
+	type listProposalsOut struct {
+		Proposals []proposalRef `json:"proposals"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "wiki_list_proposals",
+		Description: "List proposals in the review queue: pending writes awaiting human approval, plus recently merged or rejected ones.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, listProposalsOut, error) {
+		ps, err := q.List()
+		if err != nil {
+			return nil, listProposalsOut{}, err
+		}
+		out := listProposalsOut{}
+		for _, p := range ps {
+			out.Proposals = append(out.Proposals, proposalRef{
+				ID: p.ID, Slug: p.Slug, Title: p.Title, Author: p.Author,
+				Status: string(p.Status), Stale: q.Stale(p), Created: p.Created.Format("2006-01-02T15:04:05Z"),
+			})
+		}
+		return nil, out, nil
+	})
+
+	if opts.ReadOnly {
 		return s
 	}
 
 	type writeIn struct {
 		Slug    string `json:"slug" jsonschema:"slug of the page to create or replace, e.g. concepts/mcp"`
 		Content string `json:"content" jsonschema:"full markdown including YAML frontmatter with a title"`
-		Author  string `json:"author,omitempty" jsonschema:"who is making the change, e.g. claude-opus-4-8"`
 		Message string `json:"message,omitempty" jsonschema:"commit message describing the change"`
 	}
 	type writeOut struct {
-		Committed bool         `json:"committed"`
-		Issues    []lint.Issue `json:"issues"`
+		Status     string       `json:"status" jsonschema:"committed, proposed, or rejected"`
+		Committed  bool         `json:"committed"`
+		ProposalID string       `json:"proposal_id,omitempty"`
+		Issues     []lint.Issue `json:"issues"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "wiki_write",
-		Description: "Create or replace a wiki page. Lint runs first; errors block the write. On success the change is committed to git.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in writeIn) (*mcp.CallToolResult, writeOut, error) {
+		Description: "Create or replace a wiki page. Lint runs first; errors block it. A trusted caller commits directly to git; otherwise the write is queued as a proposal for a human to approve. Check the returned status.",
+	}, func(_ context.Context, req *mcp.CallToolRequest, in writeIn) (*mcp.CallToolResult, writeOut, error) {
+		principal := principalFrom(req, reg)
 		known, err := st.KnownSlugs()
 		if err != nil {
 			return nil, writeOut{}, err
@@ -189,20 +229,25 @@ func New(st *store.Store, readOnly bool) *mcp.Server {
 		fm, body := store.SplitFrontmatter(in.Content)
 		issues := lint.Check(fm, body, known)
 		if lint.HasErrors(issues) {
-			return &mcp.CallToolResult{IsError: true}, writeOut{Committed: false, Issues: issues}, nil
+			return &mcp.CallToolResult{IsError: true}, writeOut{Status: "rejected", Issues: issues}, nil
 		}
-		author := in.Author
-		if author == "" {
-			author = "agent"
+
+		if opts.ForceReview || !principal.Trusted {
+			p, err := q.Create(in.Slug, in.Content, principal.Name, issues)
+			if err != nil {
+				return nil, writeOut{}, err
+			}
+			return nil, writeOut{Status: "proposed", ProposalID: p.ID, Issues: issues}, nil
 		}
+
 		message := in.Message
 		if message == "" {
 			message = fmt.Sprintf("waqwaq: update %s", in.Slug)
 		}
-		if err := st.Write(in.Slug, in.Content, fmt.Sprintf("%s <agent@waqwaq.local>", author), message); err != nil {
+		if err := st.Write(in.Slug, in.Content, fmt.Sprintf("%s <agent@waqwaq.local>", principal.Name), message); err != nil {
 			return nil, writeOut{}, err
 		}
-		return nil, writeOut{Committed: true, Issues: issues}, nil
+		return nil, writeOut{Status: "committed", Committed: true, Issues: issues}, nil
 	})
 
 	type ingestIn struct {
@@ -223,4 +268,15 @@ func New(st *store.Store, readOnly bool) *mcp.Server {
 	})
 
 	return s
+}
+
+func principalFrom(req *mcp.CallToolRequest, reg *auth.Registry) auth.Principal {
+	var header string
+	if req != nil && req.Extra != nil && req.Extra.Header != nil {
+		header = req.Extra.Header.Get("Authorization")
+	}
+	if p, ok := reg.Resolve(header); ok {
+		return p
+	}
+	return auth.Principal{Name: "unknown"}
 }

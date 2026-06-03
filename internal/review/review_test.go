@@ -1,0 +1,99 @@
+package review
+
+import (
+	"testing"
+
+	"github.com/msradam/waqwaq/internal/store"
+)
+
+func newQueue(t *testing.T) (*Queue, *store.Store) {
+	t.Helper()
+	st, err := store.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err := New(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return q, st
+}
+
+func TestCreateThenMergeWritesPage(t *testing.T) {
+	q, st := newQueue(t)
+	p, err := q.Create("foo", "---\ntitle: Foo\n---\nbody\n", "ci-bot", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Status != Pending || p.Author != "ci-bot" || p.Title != "Foo" {
+		t.Fatalf("unexpected proposal %+v", p)
+	}
+	if _, err := st.Read("foo"); err == nil {
+		t.Fatal("page should not exist before merge")
+	}
+
+	merged, err := q.Merge(p.ID, "adam")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged.Status != Merged || merged.Reviewer != "adam" {
+		t.Fatalf("unexpected merged proposal %+v", merged)
+	}
+	page, err := st.Read("foo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Title != "Foo" {
+		t.Errorf("merged page title = %q", page.Title)
+	}
+	if _, err := q.Merge(p.ID, "adam"); err == nil {
+		t.Error("merging an already-merged proposal should fail")
+	}
+}
+
+func TestReject(t *testing.T) {
+	q, _ := newQueue(t)
+	p, _ := q.Create("bar", "---\ntitle: Bar\n---\n", "ci-bot", nil)
+	r, err := q.Reject(p.ID, "adam", "not now")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Status != Rejected || r.Reason != "not now" {
+		t.Fatalf("unexpected rejected proposal %+v", r)
+	}
+}
+
+func TestStaleWhenBaseChanges(t *testing.T) {
+	q, st := newQueue(t)
+	if err := st.Write("baz", "---\ntitle: Base\n---\nv1\n", "", "m"); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := q.Create("baz", "---\ntitle: Edit\n---\nv2\n", "ci-bot", nil)
+	if q.Stale(p) {
+		t.Fatal("a fresh proposal should not be stale")
+	}
+	if err := st.Write("baz", "---\ntitle: Base\n---\nv1-changed\n", "", "m"); err != nil {
+		t.Fatal(err)
+	}
+	if !q.Stale(p) {
+		t.Fatal("proposal should be stale after its base page changed")
+	}
+}
+
+func TestPendingCount(t *testing.T) {
+	q, _ := newQueue(t)
+	if _, err := q.Create("a", "---\ntitle: A\n---\n", "x", nil); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := q.Create("b", "---\ntitle: B\n---\n", "x", nil)
+	if _, err := q.Merge(p.ID, "adam"); err != nil {
+		t.Fatal(err)
+	}
+	n, err := q.PendingCount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("pending count = %d, want 1", n)
+	}
+}

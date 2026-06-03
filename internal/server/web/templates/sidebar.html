@@ -1,0 +1,13 @@
+{{define "sidebar"}}
+<aside class="sidebar">
+  <a class="brand" href="/">🌳 Waqwaq</a>
+  <form class="search" action="/search" method="get" role="search">
+    <input type="search" name="q" placeholder="Search…" value="{{.Query}}" aria-label="Search">
+  </form>
+  <a class="nav-link section{{if eq .Active "proposals"}} active{{end}}" href="/proposals">Proposals{{if .Pending}} <span class="badge">{{.Pending}}</span>{{end}}</a>
+  <nav>
+    {{range .Pages}}<a class="nav-link{{if eq .Slug $.Active}} active{{end}}" href="/wiki/{{.Slug}}">{{.Title}}</a>
+    {{else}}<span class="muted">No pages yet.</span>{{end}}
+  </nav>
+</aside>
+{{end}}

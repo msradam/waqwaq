@@ -1,0 +1,32 @@
+{{define "proposals.html"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Proposals · Waqwaq</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="layout">
+  {{template "sidebar" .Chrome}}
+  <main class="content">
+    <h1>Proposals</h1>
+    {{if .Proposals}}
+    <table class="proposals">
+      <thead><tr><th>Status</th><th>Page</th><th>Author</th><th>When</th></tr></thead>
+      <tbody>
+      {{range .Proposals}}
+        <tr>
+          <td><span class="status status-{{.Status}}">{{.Status}}</span></td>
+          <td><a href="/proposals/{{.ID}}">{{.Title}}</a> <span class="muted">{{.Slug}}</span></td>
+          <td>{{.Author}}</td>
+          <td class="muted">{{.Created.Format "2006-01-02 15:04"}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+    {{else}}<p class="muted">The review queue is empty.</p>{{end}}
+  </main>
+</div>
+</body>
+</html>{{end}}
