@@ -129,9 +129,40 @@ When a tokens file is present, the MCP endpoint requires `Authorization: Bearer 
 }
 ```
 
-Pending proposals appear at `/proposals` in the web UI, each with a line diff and Approve or Reject buttons. Approving writes the page and commits it, recording the proposer as the git author and the approver in the commit message. The `.waqwaq/` directory holds tokens and pending proposals and is kept out of the wiki's git history.
+Pending proposals appear at `/proposals` in the web UI, each with a line diff and Approve or Reject buttons. Approving writes the page and commits it, recording the proposer as the git author and the approver in the commit message. The `tokens.json` and `proposals/` entries under `.waqwaq/` are kept out of the wiki's git history; the settings below are versioned with the wiki.
 
 The web UI is unauthenticated and assumes a local, trusted operator. Do not expose it to an untrusted network.
+
+### Appearance and tuning
+
+Optional settings live in `<dir>/.waqwaq/config.json`. Every field is optional, and a missing file uses defaults.
+
+```json
+{
+  "title": "My Wiki",
+  "accent": "#7b2ff7",
+  "theme": "auto",
+  "addr": "127.0.0.1:8000",
+  "review": false,
+  "lint": {
+    "require_frontmatter": ["owner"],
+    "banned_terms": [
+      { "term": "TODO", "message": "resolve TODOs before publishing", "severity": "warning" }
+    ]
+  }
+}
+```
+
+- `title` sets the brand and the page-title suffix.
+- `accent` is a CSS color for links and highlights.
+- `theme` is `auto` (follow the browser), `light`, or `dark`.
+- `addr` and `review` set defaults for the matching flags; an explicit flag still wins.
+- `lint.require_frontmatter` lists frontmatter fields that must be present, in addition to the always-required `title`. A missing one blocks the write.
+- `lint.banned_terms` flags page bodies containing a term. `severity` is `warning` (default) or `error`, and an `error` blocks the write.
+
+For a full restyle, add `<dir>/.waqwaq/custom.css`. It loads after the built-in stylesheet, so you can override any rule or CSS variable, including the theme colors. Add it before starting the server.
+
+Search uses SQLite FTS5 with prefix matching, rebuilt automatically when pages change. The driver is pure Go, so the binary stays a single static file.
 
 ## Development
 

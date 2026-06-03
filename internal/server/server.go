@@ -7,6 +7,8 @@ import (
 	"html/template"
 	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -14,27 +16,58 @@ import (
 	"github.com/msradam/waqwaq/internal/auth"
 	"github.com/msradam/waqwaq/internal/render"
 	"github.com/msradam/waqwaq/internal/review"
+	"github.com/msradam/waqwaq/internal/search"
 	"github.com/msradam/waqwaq/internal/store"
 )
 
 const operatorName = "operator"
 
-type Server struct {
-	store    *store.Store
-	renderer *render.Renderer
-	tmpl     *template.Template
-	mcp      *mcp.Server
-	auth     *auth.Registry
-	queue    *review.Queue
-	readOnly bool
+// Site holds the configurable appearance of the wiki.
+type Site struct {
+	Title  string
+	Accent string
+	Theme  string
 }
 
-func New(st *store.Store, rnd *render.Renderer, mcpSrv *mcp.Server, reg *auth.Registry, q *review.Queue, readOnly bool) (*Server, error) {
+type Server struct {
+	store     *store.Store
+	renderer  *render.Renderer
+	tmpl      *template.Template
+	mcp       *mcp.Server
+	auth      *auth.Registry
+	queue     *review.Queue
+	search    search.Searcher
+	readOnly  bool
+	title     string
+	accent    string
+	theme     string
+	customCSS string // path to .waqwaq/custom.css, or "" if absent
+}
+
+func New(st *store.Store, rnd *render.Renderer, mcpSrv *mcp.Server, reg *auth.Registry, q *review.Queue, searcher search.Searcher, readOnly bool, site Site) (*Server, error) {
 	tmpl, err := template.ParseFS(assets, "web/templates/*.html")
 	if err != nil {
 		return nil, err
 	}
-	return &Server{store: st, renderer: rnd, tmpl: tmpl, mcp: mcpSrv, auth: reg, queue: q, readOnly: readOnly}, nil
+	title := site.Title
+	if title == "" {
+		title = "Waqwaq"
+	}
+	theme := site.Theme
+	if theme == "" {
+		theme = "auto"
+	}
+	custom := filepath.Join(st.Root(), ".waqwaq", "custom.css")
+	if _, err := os.Stat(custom); err != nil {
+		custom = ""
+	}
+	if searcher == nil {
+		searcher = st
+	}
+	return &Server{
+		store: st, renderer: rnd, tmpl: tmpl, mcp: mcpSrv, auth: reg, queue: q, search: searcher, readOnly: readOnly,
+		title: title, accent: site.Accent, theme: theme, customCSS: custom,
+	}, nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -48,6 +81,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/mcp/", mcpHandler)
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
+	mux.HandleFunc("/custom.css", s.handleCustomCSS)
 	mux.HandleFunc("/proposals/", s.handleProposal)
 	mux.HandleFunc("/proposals", s.handleProposals)
 	mux.HandleFunc("/search", s.handleSearch)
@@ -73,17 +107,33 @@ func (s *Server) authWrap(next http.Handler) http.Handler {
 }
 
 type chrome struct {
-	Pages    []store.PageMeta
-	Pending  int
-	Query    string
-	Active   string
-	ReadOnly bool
+	Pages     []store.PageMeta
+	Pending   int
+	Query     string
+	Active    string
+	ReadOnly  bool
+	SiteTitle string
+	Accent    string
+	Theme     string
+	CustomCSS bool
 }
 
 func (s *Server) chrome(active, query string) chrome {
 	pages, _ := s.store.List()
 	pending, _ := s.queue.PendingCount()
-	return chrome{Pages: pages, Pending: pending, Query: query, Active: active, ReadOnly: s.readOnly}
+	return chrome{
+		Pages: pages, Pending: pending, Query: query, Active: active, ReadOnly: s.readOnly,
+		SiteTitle: s.title, Accent: s.accent, Theme: s.theme, CustomCSS: s.customCSS != "",
+	}
+}
+
+func (s *Server) handleCustomCSS(w http.ResponseWriter, r *http.Request) {
+	if s.customCSS == "" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	http.ServeFile(w, r, s.customCSS)
 }
 
 type pageView struct {
@@ -126,7 +176,7 @@ func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
-	hits, err := s.store.Search(q)
+	hits, err := s.search.Search(q)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

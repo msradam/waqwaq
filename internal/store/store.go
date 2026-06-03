@@ -7,6 +7,8 @@ package store
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -76,12 +78,14 @@ func New(root string) (*Store, error) {
 		s.pages = abs
 	}
 	s.git = s.ensureGit()
-	s.ensureIgnore(".waqwaq/")
+	// Keep secrets and scratch out of history, but let settings travel with the
+	// wiki: config.json and custom.css under .waqwaq/ stay versioned.
+	s.ensureIgnore(".waqwaq/tokens.json")
+	s.ensureIgnore(".waqwaq/proposals/")
 	return s, nil
 }
 
-// ensureIgnore appends pattern to the wiki's .gitignore if absent, keeping the
-// .waqwaq/ control directory (tokens, pending proposals) out of git history.
+// ensureIgnore appends pattern to the wiki's .gitignore if absent.
 func (s *Store) ensureIgnore(pattern string) {
 	if !s.git {
 		return
@@ -168,6 +172,37 @@ func (s *Store) List() ([]PageMeta, error) {
 	}
 	sort.Slice(metas, func(i, j int) bool { return metas[i].Slug < metas[j].Slug })
 	return metas, nil
+}
+
+// Signature is a cheap hash of every page's path, mtime, and size. It changes
+// whenever any page is added, removed, or edited, including by external tools,
+// so a search index can detect staleness with stats alone, no file reads.
+func (s *Store) Signature() (string, error) {
+	h := sha256.New()
+	err := filepath.WalkDir(s.pages, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if path != s.pages && (d.Name() == ".git" || path == s.raw) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(d.Name(), ".md") {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(h, "%s|%d|%d\n", path, info.ModTime().UnixNano(), info.Size())
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func (s *Store) KnownSlugs() (map[string]bool, error) {

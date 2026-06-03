@@ -13,6 +13,7 @@ import (
 	"github.com/msradam/waqwaq/internal/auth"
 	"github.com/msradam/waqwaq/internal/lint"
 	"github.com/msradam/waqwaq/internal/review"
+	"github.com/msradam/waqwaq/internal/search"
 	"github.com/msradam/waqwaq/internal/store"
 )
 
@@ -27,6 +28,8 @@ Depending on your access, a write either commits straight to git or is queued as
 type Options struct {
 	ReadOnly    bool
 	ForceReview bool
+	Rules       lint.Rules
+	Search      search.Searcher
 }
 
 type noArgs struct{}
@@ -46,6 +49,11 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		&mcp.Implementation{Name: "waqwaq", Title: "Waqwaq wiki", Version: "0.1.0"},
 		&mcp.ServerOptions{Instructions: instructions},
 	)
+
+	var searcher search.Searcher = st
+	if opts.Search != nil {
+		searcher = opts.Search
+	}
 
 	type listOut struct {
 		Pages []pageRef `json:"pages"`
@@ -94,7 +102,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		Name:        "wiki_search",
 		Description: "Full-text search across all wiki pages.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in searchIn) (*mcp.CallToolResult, searchOut, error) {
-		hits, err := st.Search(in.Query)
+		hits, err := searcher.Search(in.Query)
 		if err != nil {
 			return nil, searchOut{}, err
 		}
@@ -168,7 +176,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 			return nil, lintOut{}, err
 		}
 		fm, body := store.SplitFrontmatter(in.Content)
-		issues := lint.Check(fm, body, known)
+		issues := lint.Check(fm, body, known, opts.Rules)
 		return nil, lintOut{Issues: issues, OK: !lint.HasErrors(issues)}, nil
 	})
 
@@ -227,7 +235,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 			return nil, writeOut{}, err
 		}
 		fm, body := store.SplitFrontmatter(in.Content)
-		issues := lint.Check(fm, body, known)
+		issues := lint.Check(fm, body, known, opts.Rules)
 		if lint.HasErrors(issues) {
 			return &mcp.CallToolResult{IsError: true}, writeOut{Status: "rejected", Issues: issues}, nil
 		}

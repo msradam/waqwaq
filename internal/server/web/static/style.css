@@ -7,6 +7,49 @@
   --accent: #0969da;
   --code-bg: #f6f8fa;
   --max: 760px;
+
+  --add-bg: #e6ffec; --add-fg: #1a7f37;
+  --del-bg: #ffebe9; --del-fg: #b32424;
+  --pending-bg: #fff3cd; --pending-fg: #8a6d00;
+  --merged-bg: #d1f0d6; --merged-fg: #1a7f37;
+  --rejected-bg: #f6d6d6; --rejected-fg: #b32424;
+  --warn-bg: #fff3cd; --warn-fg: #8a6d00; --warn-border: #f0e0a0;
+}
+
+:root[data-theme="dark"] {
+  --bg: #0d1117;
+  --fg: #e6edf3;
+  --muted: #8b949e;
+  --border: #30363d;
+  --sidebar-bg: #161b22;
+  --accent: #4493f8;
+  --code-bg: #161b22;
+
+  --add-bg: #12261e; --add-fg: #3fb950;
+  --del-bg: #25171c; --del-fg: #f85149;
+  --pending-bg: #2d2410; --pending-fg: #d29922;
+  --merged-bg: #12261e; --merged-fg: #3fb950;
+  --rejected-bg: #25171c; --rejected-fg: #f85149;
+  --warn-bg: #2d2410; --warn-fg: #d29922; --warn-border: #3d3216;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="auto"] {
+    --bg: #0d1117;
+    --fg: #e6edf3;
+    --muted: #8b949e;
+    --border: #30363d;
+    --sidebar-bg: #161b22;
+    --accent: #4493f8;
+    --code-bg: #161b22;
+
+    --add-bg: #12261e; --add-fg: #3fb950;
+    --del-bg: #25171c; --del-fg: #f85149;
+    --pending-bg: #2d2410; --pending-fg: #d29922;
+    --merged-bg: #12261e; --merged-fg: #3fb950;
+    --rejected-bg: #25171c; --rejected-fg: #f85149;
+    --warn-bg: #2d2410; --warn-fg: #d29922; --warn-border: #3d3216;
+  }
 }
 
 * { box-sizing: border-box; }
@@ -49,6 +92,7 @@ body {
   border-radius: 6px;
   font-size: 14px;
   background: var(--bg);
+  color: var(--fg);
 }
 
 nav { display: flex; flex-direction: column; gap: 2px; }
@@ -60,8 +104,19 @@ nav { display: flex; flex-direction: column; gap: 2px; }
   color: var(--fg);
   font-size: 14px;
 }
-.nav-link:hover { background: rgba(0,0,0,0.05); }
+.nav-link:hover { background: rgba(127, 127, 127, 0.12); }
 .nav-link.active { background: var(--accent); color: #fff; }
+.nav-link.section { font-weight: 600; margin-bottom: 6px; }
+
+.badge {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 10px;
+  padding: 0 7px;
+  font-size: 12px;
+  font-weight: 600;
+}
 
 .content {
   flex: 1;
@@ -112,31 +167,20 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .results a { color: var(--accent); text-decoration: none; font-weight: 600; }
 .snippet { margin: 4px 0 0; font-size: 14px; }
 
-.nav-link.section { font-weight: 600; margin-bottom: 6px; }
-.badge {
-  display: inline-block;
-  background: var(--accent);
-  color: #fff;
-  border-radius: 10px;
-  padding: 0 7px;
-  font-size: 12px;
-  font-weight: 600;
-}
-
 .proposals { border-collapse: collapse; width: 100%; max-width: var(--max); }
 .proposals th, .proposals td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
 .proposals th { font-size: 13px; color: var(--muted); font-weight: 600; }
 .proposals a { color: var(--accent); text-decoration: none; font-weight: 600; }
 
 .status { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 10px; text-transform: capitalize; }
-.status-pending { background: #fff3cd; color: #8a6d00; }
-.status-merged { background: #d1f0d6; color: #1a7f37; }
-.status-rejected { background: #f6d6d6; color: #b32424; }
+.status-pending { background: var(--pending-bg); color: var(--pending-fg); }
+.status-merged { background: var(--merged-bg); color: var(--merged-fg); }
+.status-rejected { background: var(--rejected-bg); color: var(--rejected-fg); }
 
 .warn {
-  background: #fff3cd;
-  border: 1px solid #f0e0a0;
-  color: #8a6d00;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  color: var(--warn-fg);
   padding: 10px 14px;
   border-radius: 8px;
   max-width: var(--max);
@@ -144,8 +188,8 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 
 .lint { list-style: none; padding: 0; max-width: var(--max); }
 .lint li { padding: 6px 10px; border-radius: 6px; margin-bottom: 4px; font-size: 14px; }
-.lint-error { background: #f6d6d6; color: #b32424; }
-.lint-warning { background: #fff3cd; color: #8a6d00; }
+.lint-error { background: var(--rejected-bg); color: var(--rejected-fg); }
+.lint-warning { background: var(--warn-bg); color: var(--warn-fg); }
 
 .diff {
   max-width: var(--max);
@@ -158,17 +202,17 @@ nav { display: flex; flex-direction: column; gap: 2px; }
   white-space: pre;
 }
 .diff span { display: block; }
-.diff-add { background: #e6ffec; color: #1a7f37; }
-.diff-del { background: #ffebe9; color: #b32424; }
+.diff-add { background: var(--add-bg); color: var(--add-fg); }
+.diff-del { background: var(--del-bg); color: var(--del-fg); }
 .diff-ctx { color: var(--fg); }
 
 .actions { display: flex; gap: 16px; align-items: flex-start; margin-top: 20px; flex-wrap: wrap; }
 .actions form { margin: 0; }
 .reject-form { display: flex; gap: 6px; }
-.reject-form input { padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
+.reject-form input { padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; background: var(--bg); color: var(--fg); }
 .btn { border: none; border-radius: 6px; padding: 8px 16px; font-size: 14px; font-weight: 600; cursor: pointer; }
-.btn-approve { background: #1a7f37; color: #fff; }
-.btn-reject { background: #fff; color: #b32424; border: 1px solid #f0c0c0; }
+.btn-approve { background: var(--merged-fg); color: #fff; }
+.btn-reject { background: var(--bg); color: var(--rejected-fg); border: 1px solid var(--border); }
 
 @media (max-width: 720px) {
   .layout { flex-direction: column; }

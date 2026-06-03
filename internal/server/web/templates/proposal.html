@@ -1,10 +1,10 @@
 {{define "proposal.html"}}<!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{.Chrome.Theme}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{.P.Title}} · Proposal · Waqwaq</title>
-<link rel="stylesheet" href="/static/style.css">
+<title>{{.P.Title}} · Proposal · {{.Chrome.SiteTitle}}</title>
+{{template "headlinks" .Chrome}}
 </head>
 <body>
 <div class="layout">

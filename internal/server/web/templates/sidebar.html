@@ -1,6 +1,12 @@
+{{define "headlinks"}}
+<link rel="stylesheet" href="/static/style.css">
+{{if .Accent}}<style>:root{ --accent: {{.Accent}}; }</style>{{end}}
+{{if .CustomCSS}}<link rel="stylesheet" href="/custom.css">{{end}}
+{{end}}
+
 {{define "sidebar"}}
 <aside class="sidebar">
-  <a class="brand" href="/">🌳 Waqwaq</a>
+  <a class="brand" href="/">🌳 {{.SiteTitle}}</a>
   <form class="search" action="/search" method="get" role="search">
     <input type="search" name="q" placeholder="Search…" value="{{.Query}}" aria-label="Search">
   </form>

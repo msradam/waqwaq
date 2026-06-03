@@ -13,9 +13,11 @@ import (
 	"time"
 
 	"github.com/msradam/waqwaq/internal/auth"
+	"github.com/msradam/waqwaq/internal/config"
 	"github.com/msradam/waqwaq/internal/mcpserver"
 	"github.com/msradam/waqwaq/internal/render"
 	"github.com/msradam/waqwaq/internal/review"
+	"github.com/msradam/waqwaq/internal/search"
 	"github.com/msradam/waqwaq/internal/server"
 	"github.com/msradam/waqwaq/internal/store"
 )
@@ -94,8 +96,31 @@ func cmdServe(args []string) {
 		log.Fatalf("review: %v", err)
 	}
 
-	mcpSrv := mcpserver.New(st, q, reg, mcpserver.Options{ReadOnly: *readOnly, ForceReview: *forceReview})
-	srv, err := server.New(st, render.New(), mcpSrv, reg, q, *readOnly)
+	cfg, err := config.Load(filepath.Join(st.Root(), ".waqwaq", "config.json"))
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	setFlags := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
+	if !setFlags["addr"] && cfg.Addr != "" {
+		*addr = cfg.Addr
+	}
+	if !setFlags["review"] && cfg.Review {
+		*forceReview = true
+	}
+
+	var searcher search.Searcher = st
+	if idx, err := search.New(st); err != nil {
+		log.Printf("  search : FTS5 unavailable (%v); falling back to substring scan", err)
+	} else {
+		searcher = idx
+		defer idx.Close()
+	}
+
+	mcpSrv := mcpserver.New(st, q, reg, mcpserver.Options{ReadOnly: *readOnly, ForceReview: *forceReview, Rules: cfg.Lint, Search: searcher})
+	srv, err := server.New(st, render.New(), mcpSrv, reg, q, searcher, *readOnly, server.Site{
+		Title: cfg.Title, Accent: cfg.Accent, Theme: cfg.Theme,
+	})
 	if err != nil {
 		log.Fatalf("server: %v", err)
 	}
