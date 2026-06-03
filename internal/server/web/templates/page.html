@@ -28,7 +28,7 @@
       {{end}}
       {{if .Slug}}
       <footer class="attribution">
-        {{if .Attribution}}Last touched by <strong>{{.Attribution.Author}}</strong>{{if .Attribution.Approver}}, approved by <strong>{{.Attribution.Approver}}</strong>{{end}}{{if .Attribution.When}} · {{.Attribution.When}}{{end}} · {{end}}{{if .Chrome.CanEdit}}<a href="{{$.Chrome.Base}}/edit/{{.Slug}}">edit</a> · {{end}}<a href="{{$.Chrome.Base}}/history/{{.Slug}}">history</a>
+        {{if .Attribution}}{{if .Attribution.Approver}}<span class="status status-merged">reviewed</span> {{end}}{{if .Attribution.Stale}}<span class="status status-pending">may be stale</span> {{end}}Last touched by <strong>{{.Attribution.Author}}</strong>{{if .Attribution.Approver}}, approved by <strong>{{.Attribution.Approver}}</strong>{{end}}{{if .Attribution.When}} · {{.Attribution.When}}{{end}} · {{end}}{{if .Chrome.CanEdit}}<a href="{{$.Chrome.Base}}/edit/{{.Slug}}">edit</a> · {{end}}<a href="{{$.Chrome.Base}}/history/{{.Slug}}">history</a>
       </footer>
       {{end}}
     {{end}}

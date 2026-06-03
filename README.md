@@ -218,6 +218,8 @@ By default the web UI is open and trusts local access: on a loopback bind anyone
 
 To require authentication, set `web.proxy_header` to the header your reverse proxy injects after it authenticates the user, for example `X-Forwarded-User` from oauth2-proxy or Authelia. Login and SSO/OIDC are handled by the proxy, so they are not built into the binary. With a proxy header set, every UI request needs an authenticated user, and roles control what they can do: `viewer` reads, `editor` also edits and uploads, `admin` also approves proposals. List people under `web.admins` and `web.editors`; everyone else gets `web.default_role`. The MCP endpoint keeps its own bearer-token auth, independent of the web header.
 
+Without a reverse proxy, set `web.users` instead: a list of `{ "name", "password", "role" }` where `password` is a bcrypt hash from `waqwaq passwd`. The server then serves a login form and tracks a signed session cookie. The same `viewer`/`editor`/`admin` roles apply.
+
 ### Appearance and tuning
 
 Optional settings live in `<dir>/.waqwaq/config.json`. Every field is optional, and a missing file uses defaults.

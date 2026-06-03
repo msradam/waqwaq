@@ -1,0 +1,20 @@
+{{define "login.html"}}<!doctype html>
+<html lang="en" data-theme="{{.Chrome.Theme}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · {{.Chrome.SiteTitle}}</title>
+{{template "headlinks" .Chrome}}
+</head>
+<body>
+<main class="content" style="max-width:340px;margin:80px auto">
+  <h1>🌳 {{.Chrome.SiteTitle}}</h1>
+  {{if .Error}}<p class="lint-error" style="padding:8px 12px;border-radius:6px">{{.Error}}</p>{{end}}
+  <form class="editor" method="post" action="{{.Chrome.Base}}/login">
+    <input class="slug-input" type="text" name="name" placeholder="Username" autofocus autocomplete="username">
+    <input class="slug-input" type="password" name="password" placeholder="Password" autocomplete="current-password">
+    <button class="btn btn-approve" type="submit">Sign in</button>
+  </form>
+</main>
+</body>
+</html>{{end}}

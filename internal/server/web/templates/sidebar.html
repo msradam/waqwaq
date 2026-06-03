@@ -23,6 +23,7 @@
   <a class="nav-link section{{if eq .Active "health"}} active{{end}}" href="{{.Base}}/health">Canopy</a>
   <a class="nav-link section{{if eq .Active "tags"}} active{{end}}" href="{{.Base}}/tags">Tags</a>
   {{if .CanEdit}}<a class="nav-link section" href="{{.Base}}/edit/">+ New page</a>{{end}}
+  {{if .Logout}}<a class="nav-link section" href="{{.Base}}/logout">Sign out</a>{{end}}
   <nav>
     {{if .Nav}}{{template "navtree" .Nav}}{{else}}<span class="muted">No pages yet.</span>{{end}}
   </nav>

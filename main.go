@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"flag"
@@ -15,6 +16,8 @@ import (
 	"regexp"
 	"syscall"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/msradam/waqwaq/internal/auth"
 	"github.com/msradam/waqwaq/internal/config"
@@ -43,6 +46,8 @@ func main() {
 		cmdIngest(os.Args[2:])
 	case "export":
 		cmdExport(os.Args[2:])
+	case "passwd":
+		cmdPasswd(os.Args[2:])
 	case "version", "-v", "--version":
 		fmt.Println("waqwaq", version)
 	default:
@@ -60,6 +65,7 @@ usage:
                                       serve web UI + MCP over one port
   waqwaq ingest <dir> <file>...       add raw documents to the wiki's raw/ area
   waqwaq export <dir> <outdir>        render the wiki to a static HTML site
+  waqwaq passwd [password]            print a bcrypt hash for a web.users entry
   waqwaq version
 
 Pages are served from <dir>/wiki if present, otherwise from <dir> itself, so a
@@ -205,9 +211,13 @@ func buildWiki(dir, base string, readOnly, forceReview bool, tokensPath string, 
 	}
 	queueAll := forceReview || cfg.Review
 	mcpSrv := mcpserver.New(st, q, reg, mcpserver.Options{ReadOnly: readOnly, ForceReview: queueAll, Rules: cfg.Lint, Search: searcher})
+	users := make([]server.WebUser, 0, len(cfg.Web.Users))
+	for _, u := range cfg.Web.Users {
+		users = append(users, server.WebUser{Name: u.Name, Hash: u.Password, Role: u.Role})
+	}
 	srv, err := server.New(server.Options{
 		Store: st, Renderer: render.New(), MCP: mcpSrv, Auth: reg, Queue: q, Search: searcher, Rules: cfg.Lint,
-		Web:      server.WebPolicy{ProxyHeader: cfg.Web.ProxyHeader, DefaultRole: cfg.Web.DefaultRole, Admins: cfg.Web.Admins, Editors: cfg.Web.Editors},
+		Web:      server.WebPolicy{ProxyHeader: cfg.Web.ProxyHeader, DefaultRole: cfg.Web.DefaultRole, Admins: cfg.Web.Admins, Editors: cfg.Web.Editors, Users: users},
 		ReadOnly: readOnly,
 		Site:     server.Site{Title: cfg.Title, Accent: cfg.Accent, Theme: cfg.Theme},
 		Base:     base,
@@ -384,6 +394,27 @@ func copyDir(src, dst string) {
 			_ = os.WriteFile(filepath.Join(dst, e.Name()), data, 0o644)
 		}
 	}
+}
+
+func cmdPasswd(args []string) {
+	var pw string
+	if len(args) > 0 {
+		pw = args[0]
+	} else {
+		fmt.Fprint(os.Stderr, "Password: ")
+		sc := bufio.NewScanner(os.Stdin)
+		if sc.Scan() {
+			pw = sc.Text()
+		}
+	}
+	if pw == "" {
+		log.Fatal("passwd: empty password")
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
+	if err != nil {
+		log.Fatalf("passwd: %v", err)
+	}
+	fmt.Println(string(hash))
 }
 
 const staticPageHTML = `<!doctype html>

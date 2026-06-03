@@ -5,6 +5,10 @@ package server
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -15,10 +19,12 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/msradam/waqwaq/internal/auth"
 	"github.com/msradam/waqwaq/internal/lint"
@@ -39,11 +45,19 @@ type Site struct {
 
 // WebPolicy configures web-UI access. When ProxyHeader is set, identity is read
 // from that header (login and SSO are handled by the reverse proxy in front).
+// When Users is set instead, the server runs a built-in login.
 type WebPolicy struct {
 	ProxyHeader string
 	DefaultRole string
 	Admins      []string
 	Editors     []string
+	Users       []WebUser
+}
+
+type WebUser struct {
+	Name string
+	Hash string // bcrypt
+	Role string
 }
 
 type Role int
@@ -83,6 +97,7 @@ type Server struct {
 	customCSS string    // path to .waqwaq/custom.css, or "" if absent
 	base      string    // URL base path: "" single-wiki, "/w/<name>" in farm mode
 	wikis     []WikiRef // all wikis, for the farm switcher (empty when single)
+	secret    []byte    // per-run secret for signing session cookies
 }
 
 // WikiRef identifies a wiki for the farm switcher.
@@ -128,30 +143,53 @@ func New(o Options) (*Server, error) {
 	if searcher == nil {
 		searcher = o.Store
 	}
+	secret := make([]byte, 32)
+	_, _ = rand.Read(secret)
 	return &Server{
 		store: o.Store, renderer: o.Renderer, tmpl: tmpl, mcp: o.MCP, auth: o.Auth, queue: o.Queue,
 		search: searcher, rules: o.Rules, web: o.Web, readOnly: o.ReadOnly,
 		title: title, accent: o.Site.Accent, theme: theme, customCSS: custom,
-		base: o.Base, wikis: o.Wikis,
+		base: o.Base, wikis: o.Wikis, secret: secret,
 	}, nil
 }
 
-func (s *Server) webEnabled() bool { return s.web.ProxyHeader != "" }
+func (s *Server) webEnabled() bool { return s.web.ProxyHeader != "" || len(s.web.Users) > 0 }
 
-// role returns the caller's role. In open mode (no proxy header) it falls back
-// to the local/trusted check: loopback or a trusted token is admin, everyone
-// else is a viewer. With a proxy header it maps the header identity to a role.
+// role returns the caller's role. Open mode (no web auth) maps loopback or a
+// trusted token to admin and everyone else to viewer. With a proxy header,
+// identity is the header value; with built-in users, it is the signed session.
 func (s *Server) role(r *http.Request) Role {
-	if !s.webEnabled() {
+	switch {
+	case s.web.ProxyHeader != "":
+		user := strings.TrimSpace(r.Header.Get(s.web.ProxyHeader))
+		if user == "" {
+			return RoleNone
+		}
+		return s.proxyRole(user)
+	case len(s.web.Users) > 0:
+		c, err := r.Cookie("waqwaq_session")
+		if err != nil {
+			return RoleNone
+		}
+		name, ok := s.verifySession(c.Value)
+		if !ok {
+			return RoleNone
+		}
+		for _, u := range s.web.Users {
+			if u.Name == name {
+				return parseRole(u.Role)
+			}
+		}
+		return RoleNone
+	default:
 		if s.canReview(r) {
 			return RoleAdmin
 		}
 		return RoleViewer
 	}
-	user := strings.TrimSpace(r.Header.Get(s.web.ProxyHeader))
-	if user == "" {
-		return RoleNone
-	}
+}
+
+func (s *Server) proxyRole(user string) Role {
 	for _, a := range s.web.Admins {
 		if a == user {
 			return RoleAdmin
@@ -168,25 +206,82 @@ func (s *Server) role(r *http.Request) Role {
 	return RoleViewer
 }
 
-// webGuard requires an authenticated viewer for the human UI when a proxy header
-// is configured. Health checks, MCP (its own token auth), and static assets are
-// exempt.
+// webGuard requires an authenticated viewer for the human UI when web auth is
+// configured. Health, MCP (its own token auth), static, and the login routes
+// are exempt.
 func (s *Server) webGuard(next http.Handler) http.Handler {
 	if !s.webEnabled() {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
-		if p == "/healthz" || p == "/mcp" || strings.HasPrefix(p, "/mcp/") || strings.HasPrefix(p, "/static/") {
+		if p == "/healthz" || p == "/mcp" || strings.HasPrefix(p, "/mcp/") || strings.HasPrefix(p, "/static/") || p == "/login" || p == "/logout" {
 			next.ServeHTTP(w, r)
 			return
 		}
 		if s.role(r) == RoleNone {
+			if len(s.web.Users) > 0 && r.Method == http.MethodGet {
+				http.Redirect(w, r, s.base+"/login", http.StatusSeeOther)
+				return
+			}
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) signSession(name string) string {
+	msg := name + "|" + strconv.FormatInt(time.Now().Add(7*24*time.Hour).Unix(), 10)
+	mac := hmac.New(sha256.New, s.secret)
+	mac.Write([]byte(msg))
+	return msg + "|" + hex.EncodeToString(mac.Sum(nil))
+}
+
+func (s *Server) verifySession(value string) (string, bool) {
+	parts := strings.Split(value, "|")
+	if len(parts) != 3 {
+		return "", false
+	}
+	mac := hmac.New(sha256.New, s.secret)
+	mac.Write([]byte(parts[0] + "|" + parts[1]))
+	if !hmac.Equal([]byte(parts[2]), []byte(hex.EncodeToString(mac.Sum(nil)))) {
+		return "", false
+	}
+	exp, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || time.Now().Unix() > exp {
+		return "", false
+	}
+	return parts[0], true
+}
+
+type loginView struct {
+	Chrome chrome
+	Error  string
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		name, pass := r.FormValue("name"), r.FormValue("password")
+		for _, u := range s.web.Users {
+			if u.Name == name && bcrypt.CompareHashAndPassword([]byte(u.Hash), []byte(pass)) == nil {
+				http.SetCookie(w, &http.Cookie{
+					Name: "waqwaq_session", Value: s.signSession(name), Path: s.base + "/",
+					HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 7 * 24 * 3600,
+				})
+				http.Redirect(w, r, s.base+"/", http.StatusSeeOther)
+				return
+			}
+		}
+		s.exec(w, "login.html", loginView{Chrome: s.chrome(r, "", ""), Error: "Invalid username or password."})
+		return
+	}
+	s.exec(w, "login.html", loginView{Chrome: s.chrome(r, "", "")})
+}
+
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{Name: "waqwaq_session", Value: "", Path: s.base + "/", MaxAge: -1})
+	http.Redirect(w, r, s.base+"/login", http.StatusSeeOther)
 }
 
 func (s *Server) Handler() http.Handler {
@@ -215,6 +310,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/edit/", s.handleEdit)
 	mux.HandleFunc("/upload", s.handleUpload)
 	mux.HandleFunc("/assets/", s.handleAsset)
+	mux.HandleFunc("/login", s.handleLogin)
+	mux.HandleFunc("/logout", s.handleLogout)
 	mux.HandleFunc("/search", s.handleSearch)
 	mux.HandleFunc("/wiki/", s.handlePage)
 	mux.HandleFunc("/", s.handleIndex)
@@ -268,6 +365,7 @@ type chrome struct {
 	CustomCSS bool
 	Base      string
 	Wikis     []WikiRef
+	Logout    bool
 }
 
 func (s *Server) chrome(r *http.Request, active, query string) chrome {
@@ -277,7 +375,7 @@ func (s *Server) chrome(r *http.Request, active, query string) chrome {
 		Nav: buildNav(pages, active, s.base), Pending: pending, Query: query, Active: active,
 		ReadOnly: s.readOnly, CanEdit: !s.readOnly && s.role(r) >= RoleEditor,
 		SiteTitle: s.title, Accent: s.accent, Theme: s.theme, CustomCSS: s.customCSS != "",
-		Base: s.base, Wikis: s.wikis,
+		Base: s.base, Wikis: s.wikis, Logout: len(s.web.Users) > 0,
 	}
 }
 
@@ -408,6 +506,7 @@ type attributionView struct {
 	Author   string
 	Approver string
 	When     string
+	Stale    bool
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -456,7 +555,10 @@ func (s *Server) renderPage(w http.ResponseWriter, r *http.Request, page *store.
 	}
 	var attr *attributionView
 	if a, ok := s.store.LastTouched(page.Slug); ok {
-		attr = &attributionView{Author: a.Author, Approver: a.Approver, When: relativeTime(a.When)}
+		attr = &attributionView{
+			Author: a.Author, Approver: a.Approver, When: relativeTime(a.When),
+			Stale: !a.When.IsZero() && time.Since(a.When) > 90*24*time.Hour,
+		}
 	}
 	backlinks, _ := s.store.Backlinks(page.Slug)
 	s.exec(w, "page.html", pageView{

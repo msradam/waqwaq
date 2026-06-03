@@ -26,10 +26,17 @@ type Config struct {
 // from that reverse-proxy header (delegate SSO to the proxy); otherwise the UI
 // is open and trusts local/loopback access.
 type Web struct {
-	ProxyHeader string   `json:"proxy_header"`
-	DefaultRole string   `json:"default_role"` // viewer | editor | admin
-	Admins      []string `json:"admins"`
-	Editors     []string `json:"editors"`
+	ProxyHeader string    `json:"proxy_header"`
+	DefaultRole string    `json:"default_role"` // viewer | editor | admin
+	Admins      []string  `json:"admins"`
+	Editors     []string  `json:"editors"`
+	Users       []WebUser `json:"users"` // built-in login, when no reverse proxy
+}
+
+type WebUser struct {
+	Name     string `json:"name"`
+	Password string `json:"password"` // bcrypt hash, generate with `waqwaq passwd`
+	Role     string `json:"role"`     // viewer | editor | admin
 }
 
 func Default() Config {
