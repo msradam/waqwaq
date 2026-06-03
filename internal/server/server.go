@@ -5,8 +5,10 @@ package server
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -100,6 +102,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/tags", s.handleTags)
 	mux.HandleFunc("/history/", s.handleHistory)
 	mux.HandleFunc("/edit/", s.handleEdit)
+	mux.HandleFunc("/upload", s.handleUpload)
+	mux.HandleFunc("/assets/", s.handleAsset)
 	mux.HandleFunc("/search", s.handleSearch)
 	mux.HandleFunc("/wiki/", s.handlePage)
 	mux.HandleFunc("/", s.handleIndex)
@@ -216,6 +220,48 @@ func markNav(nodes []*navNode, active string) {
 		n.Open = active == n.Path || strings.HasPrefix(active, n.Path+"/")
 		markNav(n.Children, active)
 	}
+}
+
+// handleUpload accepts a multipart file (images/pdf) from the editor, stores it
+// as a content-addressed asset, and returns its URL. Gated like editing.
+func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
+	if s.readOnly || !s.canReview(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 25<<20)
+	file, hdr, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "no file", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(file)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	name, err := s.store.AddAsset(data, hdr.Filename)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"url": "/assets/" + name})
+}
+
+func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
+	path, err := s.store.AssetPath(strings.TrimPrefix(r.URL.Path, "/assets/"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if _, err := os.Stat(path); err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	http.ServeFile(w, r, path)
 }
 
 func (s *Server) handleCustomCSS(w http.ResponseWriter, r *http.Request) {

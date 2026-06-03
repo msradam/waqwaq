@@ -344,8 +344,9 @@ nav { display: flex; flex-direction: column; gap: 2px; }
   color: var(--fg);
   font-size: 14px;
 }
-.editor-actions { display: flex; gap: 12px; align-items: center; }
+.editor-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .btn { display: inline-block; text-decoration: none; }
+.btn-ghost { background: var(--sidebar-bg); color: var(--fg); border: 1px solid var(--border); cursor: pointer; }
 
 @media (max-width: 1100px) {
   .toc-rail { display: none; }

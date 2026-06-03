@@ -20,8 +20,38 @@
       <div class="editor-actions">
         <button class="btn btn-approve" type="submit">Save</button>
         <a class="btn btn-reject" href="{{if .Slug}}/wiki/{{.Slug}}{{else}}/{{end}}">Cancel</a>
+        <label class="btn btn-ghost">Insert image<input id="imgfile" type="file" accept="image/png,image/jpeg,image/gif,image/webp,application/pdf" hidden></label>
+        <span class="muted">paste an image to upload it</span>
       </div>
     </form>
+    <script>
+      (function () {
+        var ta = document.querySelector('.editor textarea');
+        function insert(text) {
+          var s = ta.selectionStart, e = ta.selectionEnd;
+          ta.value = ta.value.slice(0, s) + text + ta.value.slice(e);
+          ta.selectionStart = ta.selectionEnd = s + text.length;
+          ta.focus();
+        }
+        async function upload(file) {
+          var fd = new FormData();
+          fd.append('file', file);
+          var r = await fetch('/upload', { method: 'POST', body: fd });
+          if (!r.ok) { alert('Upload failed: ' + (await r.text())); return; }
+          var j = await r.json();
+          insert('![' + file.name + '](' + j.url + ')\n');
+        }
+        ta.addEventListener('paste', function (ev) {
+          for (var i = 0; i < ev.clipboardData.items.length; i++) {
+            var it = ev.clipboardData.items[i];
+            if (it.type.indexOf('image/') === 0) { ev.preventDefault(); upload(it.getAsFile()); }
+          }
+        });
+        document.getElementById('imgfile').addEventListener('change', function (e) {
+          if (e.target.files[0]) upload(e.target.files[0]);
+        });
+      })();
+    </script>
   </main>
 </div>
 </body>
