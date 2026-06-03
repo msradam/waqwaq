@@ -1,12 +1,42 @@
 package store
 
 import (
+	"fmt"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 )
+
+var revRe = regexp.MustCompile(`^[0-9a-fA-F]{4,40}(~[0-9]+)?$`)
+
+// ReadAtRev returns a page's content at a git revision (a commit hash, optionally
+// with a ~N parent suffix). It returns "" when the file did not exist there.
+func (s *Store) ReadAtRev(slug, ref string) (string, error) {
+	if !s.git {
+		return "", nil
+	}
+	if !revRe.MatchString(ref) {
+		return "", fmt.Errorf("invalid revision %q", ref)
+	}
+	p, err := s.pathFor(slug)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(s.gitRoot, p)
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.Command("git", "show", ref+":"+rel)
+	cmd.Dir = s.gitRoot
+	out, err := cmd.Output()
+	if err != nil {
+		return "", nil // file did not exist at that revision
+	}
+	return string(out), nil
+}
 
 type Change struct {
 	Slug   string    `json:"slug"`

@@ -1,0 +1,23 @@
+{{define "diff.html"}}<!doctype html>
+<html lang="en" data-theme="{{.Chrome.Theme}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diff {{.Rev}} · {{.Chrome.SiteTitle}}</title>
+{{template "headlinks" .Chrome}}
+</head>
+<body>
+<div class="layout">
+  {{template "sidebar" .Chrome}}
+  <main class="content">
+    <p class="muted"><a href="/history/{{.Slug}}">← History</a></p>
+    <h1>Changes in <code>{{.Rev}}</code></h1>
+    <p class="muted"><a href="/wiki/{{.Slug}}">{{.Slug}}</a></p>
+    {{if .Diff}}
+    <pre class="diff">{{range .Diff}}<span class="diff-{{.Op}}">{{if eq .Op "add"}}+ {{else if eq .Op "del"}}- {{else}}  {{end}}{{.Text}}</span>
+{{end}}</pre>
+    {{else}}<p class="muted">No textual changes.</p>{{end}}
+  </main>
+</div>
+</body>
+</html>{{end}}

@@ -28,7 +28,7 @@
       {{end}}
       {{if .Slug}}
       <footer class="attribution">
-        {{if .Attribution}}Last touched by <strong>{{.Attribution.Author}}</strong>{{if .Attribution.Approver}}, approved by <strong>{{.Attribution.Approver}}</strong>{{end}}{{if .Attribution.When}} · {{.Attribution.When}}{{end}} · {{end}}{{if not .Chrome.ReadOnly}}<a href="/edit/{{.Slug}}">edit</a> · {{end}}<a href="/history/{{.Slug}}">history</a>
+        {{if .Attribution}}Last touched by <strong>{{.Attribution.Author}}</strong>{{if .Attribution.Approver}}, approved by <strong>{{.Attribution.Approver}}</strong>{{end}}{{if .Attribution.When}} · {{.Attribution.When}}{{end}} · {{end}}{{if .Chrome.CanEdit}}<a href="/edit/{{.Slug}}">edit</a> · {{end}}<a href="/history/{{.Slug}}">history</a>
       </footer>
       {{end}}
     {{end}}

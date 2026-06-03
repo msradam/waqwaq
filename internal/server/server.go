@@ -184,6 +184,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/tags/", s.handleTags)
 	mux.HandleFunc("/tags", s.handleTags)
 	mux.HandleFunc("/history/", s.handleHistory)
+	mux.HandleFunc("/diff/", s.handleDiff)
 	mux.HandleFunc("/edit/", s.handleEdit)
 	mux.HandleFunc("/upload", s.handleUpload)
 	mux.HandleFunc("/assets/", s.handleAsset)
@@ -233,17 +234,19 @@ type chrome struct {
 	Query     string
 	Active    string
 	ReadOnly  bool
+	CanEdit   bool
 	SiteTitle string
 	Accent    string
 	Theme     string
 	CustomCSS bool
 }
 
-func (s *Server) chrome(active, query string) chrome {
+func (s *Server) chrome(r *http.Request, active, query string) chrome {
 	pages, _ := s.store.List()
 	pending, _ := s.queue.PendingCount()
 	return chrome{
-		Nav: buildNav(pages, active), Pending: pending, Query: query, Active: active, ReadOnly: s.readOnly,
+		Nav: buildNav(pages, active), Pending: pending, Query: query, Active: active,
+		ReadOnly: s.readOnly, CanEdit: !s.readOnly && s.role(r) >= RoleEditor,
 		SiteTitle: s.title, Accent: s.accent, Theme: s.theme, CustomCSS: s.customCSS != "",
 	}
 }
@@ -383,12 +386,12 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, slug := range []string{"index", "README", "readme", "Home", "home"} {
 		if page, err := s.store.Read(slug); err == nil {
-			s.renderPage(w, page)
+			s.renderPage(w, r, page)
 			return
 		}
 	}
 	s.exec(w, "page.html", pageView{
-		Chrome:  s.chrome("", ""),
+		Chrome:  s.chrome(r, "", ""),
 		Title:   "Waqwaq",
 		Content: "<p>No index page yet. Pick a page from the sidebar, or create one with the <code>wiki_write</code> MCP tool.</p>",
 	})
@@ -398,10 +401,10 @@ func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 	slug := strings.TrimPrefix(r.URL.Path, "/wiki/")
 	page, err := s.store.Read(slug)
 	if err != nil {
-		s.notFound(w, slug)
+		s.notFound(w, r, slug)
 		return
 	}
-	s.renderPage(w, page)
+	s.renderPage(w, r, page)
 }
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
@@ -411,10 +414,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.exec(w, "page.html", pageView{Chrome: s.chrome("", q), Title: "Search", Query: q, IsSearch: true, Hits: hits})
+	s.exec(w, "page.html", pageView{Chrome: s.chrome(r, "", q), Title: "Search", Query: q, IsSearch: true, Hits: hits})
 }
 
-func (s *Server) renderPage(w http.ResponseWriter, page *store.Page) {
+func (s *Server) renderPage(w http.ResponseWriter, r *http.Request, page *store.Page) {
 	html, toc, err := s.renderer.Render(page.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -426,7 +429,7 @@ func (s *Server) renderPage(w http.ResponseWriter, page *store.Page) {
 	}
 	backlinks, _ := s.store.Backlinks(page.Slug)
 	s.exec(w, "page.html", pageView{
-		Chrome: s.chrome(page.Slug, ""), Title: page.Title, Content: html, Slug: page.Slug,
+		Chrome: s.chrome(r, page.Slug, ""), Title: page.Title, Content: html, Slug: page.Slug,
 		TOC: toc, Tags: store.FrontmatterTags(page.Frontmatter), Backlinks: backlinks, Attribution: attr,
 	})
 }
@@ -458,14 +461,14 @@ func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
 		}
 		content := r.FormValue("content")
 		if slug == "" {
-			s.exec(w, "edit.html", editView{Chrome: s.chrome("", ""), Content: content,
+			s.exec(w, "edit.html", editView{Chrome: s.chrome(r, "", ""), Content: content,
 				Issues: []lint.Issue{{Severity: "error", Message: "a slug is required"}}})
 			return
 		}
 		fm, body := store.SplitFrontmatter(content)
 		known, _ := s.store.KnownSlugs()
 		if issues := lint.Check(fm, body, known, s.rules); lint.HasErrors(issues) {
-			s.exec(w, "edit.html", editView{Chrome: s.chrome(slug, ""), Slug: slug, Content: content, Issues: issues})
+			s.exec(w, "edit.html", editView{Chrome: s.chrome(r, slug, ""), Slug: slug, Content: content, Issues: issues})
 			return
 		}
 		author := fmt.Sprintf("%s <operator@waqwaq.local>", operatorName)
@@ -483,7 +486,7 @@ func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
 			content = p.Raw
 		}
 	}
-	s.exec(w, "edit.html", editView{Chrome: s.chrome(slug, ""), Slug: slug, Content: content})
+	s.exec(w, "edit.html", editView{Chrome: s.chrome(r, slug, ""), Slug: slug, Content: content})
 }
 
 type healthView struct {
@@ -492,14 +495,14 @@ type healthView struct {
 	Recent []store.Change
 }
 
-func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	h, err := s.store.Health()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	recent, _ := s.store.Recent(15)
-	s.exec(w, "health.html", healthView{Chrome: s.chrome("health", ""), Health: h, Recent: recent})
+	s.exec(w, "health.html", healthView{Chrome: s.chrome(r, "health", ""), Health: h, Recent: recent})
 }
 
 type tagCount struct {
@@ -521,7 +524,7 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if tag := strings.TrimPrefix(r.URL.Path, "/tags/"); tag != "" && tag != r.URL.Path {
-		s.exec(w, "tags.html", tagsView{Chrome: s.chrome("tags", ""), Tag: tag, Pages: all[tag]})
+		s.exec(w, "tags.html", tagsView{Chrome: s.chrome(r, "tags", ""), Tag: tag, Pages: all[tag]})
 		return
 	}
 	names := make([]string, 0, len(all))
@@ -533,7 +536,7 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 	for _, name := range names {
 		counts = append(counts, tagCount{Tag: name, Count: len(all[name])})
 	}
-	s.exec(w, "tags.html", tagsView{Chrome: s.chrome("tags", ""), Tags: counts})
+	s.exec(w, "tags.html", tagsView{Chrome: s.chrome(r, "tags", ""), Tags: counts})
 }
 
 type historyView struct {
@@ -547,11 +550,39 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	slug := strings.TrimPrefix(r.URL.Path, "/history/")
 	page, err := s.store.Read(slug)
 	if err != nil {
-		s.notFound(w, slug)
+		s.notFound(w, r, slug)
 		return
 	}
 	revs, _ := s.store.History(slug)
-	s.exec(w, "history.html", historyView{Chrome: s.chrome("", ""), Slug: slug, Title: page.Title, Revisions: revs})
+	s.exec(w, "history.html", historyView{Chrome: s.chrome(r, "", ""), Slug: slug, Title: page.Title, Revisions: revs})
+}
+
+type diffPageView struct {
+	Chrome chrome
+	Slug   string
+	Rev    string
+	Diff   []diffLine
+}
+
+// handleDiff shows what a single revision changed, the page at that commit
+// compared against its parent.
+func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
+	slug := strings.TrimPrefix(r.URL.Path, "/diff/")
+	rev := r.URL.Query().Get("rev")
+	if slug == "" || rev == "" {
+		http.NotFound(w, r)
+		return
+	}
+	to, err := s.store.ReadAtRev(slug, rev)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	from, _ := s.store.ReadAtRev(slug, rev+"~1")
+	s.exec(w, "diff.html", diffPageView{
+		Chrome: s.chrome(r, "", ""), Slug: slug, Rev: rev,
+		Diff: lineDiff(splitLines(from), splitLines(to)),
+	})
 }
 
 func relativeTime(t time.Time) string {
@@ -578,13 +609,13 @@ type proposalsView struct {
 	Proposals []*review.Proposal
 }
 
-func (s *Server) handleProposals(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleProposals(w http.ResponseWriter, r *http.Request) {
 	ps, err := s.queue.List()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.exec(w, "proposals.html", proposalsView{Chrome: s.chrome("proposals", ""), Proposals: ps})
+	s.exec(w, "proposals.html", proposalsView{Chrome: s.chrome(r, "proposals", ""), Proposals: ps})
 }
 
 type proposalView struct {
@@ -639,7 +670,7 @@ func (s *Server) handleProposal(w http.ResponseWriter, r *http.Request) {
 		base = cur.Raw
 	}
 	s.exec(w, "proposal.html", proposalView{
-		Chrome:  s.chrome("proposals", ""),
+		Chrome:  s.chrome(r, "proposals", ""),
 		P:       p,
 		Stale:   s.queue.Stale(p),
 		Pending: p.Status == review.Pending,
@@ -664,11 +695,11 @@ func (s *Server) execStatus(w http.ResponseWriter, status int, name string, data
 	_, _ = buf.WriteTo(w)
 }
 
-func (s *Server) notFound(w http.ResponseWriter, slug string) {
+func (s *Server) notFound(w http.ResponseWriter, r *http.Request, slug string) {
 	msg := template.HTML("<h1>Page not found</h1><p class=\"muted\">There is no page at <code>" +
 		template.HTMLEscapeString(slug) +
 		"</code>. Pick a page from the sidebar, or create it with the <code>wiki_write</code> MCP tool.</p>")
-	s.execStatus(w, http.StatusNotFound, "page.html", pageView{Chrome: s.chrome("", ""), Title: "Not found", Content: msg})
+	s.execStatus(w, http.StatusNotFound, "page.html", pageView{Chrome: s.chrome(r, "", ""), Title: "Not found", Content: msg})
 }
 
 type diffLine struct {

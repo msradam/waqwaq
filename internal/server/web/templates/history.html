@@ -17,7 +17,7 @@
       <tbody>
       {{range .Revisions}}
         <tr>
-          <td class="muted"><code>{{.Hash}}</code></td>
+          <td><a href="/diff/{{$.Slug}}?rev={{.Hash}}"><code>{{.Hash}}</code></a></td>
           <td>{{.Message}}</td>
           <td>{{.Author}}</td>
           <td class="muted">{{.When.Format "2006-01-02"}}</td>
