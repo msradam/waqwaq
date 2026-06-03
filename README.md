@@ -4,7 +4,7 @@ A git-backed markdown wiki that humans browse and AI agents read and write, serv
 
 ## What it is
 
-Waqwaq serves a directory of markdown files two ways at once. People get a web UI for reading and searching pages. AI agents get a Model Context Protocol (MCP) endpoint on the same port, with tools to read the wiki and to create or update pages. Every page is a markdown file on disk, versioned with git, so changes have history, blame, and rollback.
+Waqwaq serves a directory of markdown files two ways at once. People get a web UI for reading, searching, and editing pages, including image upload. AI agents get a Model Context Protocol (MCP) endpoint on the same port, with tools to read the wiki and to create or update pages. Every page is a markdown file on disk, versioned with git, so changes have history, blame, and rollback.
 
 Writes from agents pass through a lint step before they land. A page without a frontmatter title is rejected, and links that point at missing pages are flagged. Each accepted write is committed to git with the author recorded, so you can see which agent or person last touched a page.
 
@@ -194,7 +194,9 @@ When a tokens file is present, the MCP endpoint requires `Authorization: Bearer 
 
 Pending proposals appear at `/proposals` in the web UI, each with a line diff and Approve or Reject buttons. Approving writes the page and commits it, recording the proposer as the git author and the approver in the commit message. The `tokens.json` and `proposals/` entries under `.waqwaq/` are kept out of the wiki's git history; the settings below are versioned with the wiki.
 
-The web UI assumes a local, trusted operator. Browsing and search are unauthenticated, while approving or rejecting proposals is allowed only from a loopback connection or with a trusted token, so the merge action stays closed when the server is bound to a public interface. Do not expose the read UI to a network whose users should not see the wiki.
+By default the web UI is open and trusts local access: on a loopback bind anyone local can read and edit, and mutating actions (edit, upload, approve) are refused from non-loopback connections without a trusted token.
+
+To require authentication, set `web.proxy_header` to the header your reverse proxy injects after it authenticates the user, for example `X-Forwarded-User` from oauth2-proxy or Authelia. Login and SSO/OIDC are handled by the proxy, so they are not built into the binary. With a proxy header set, every UI request needs an authenticated user, and roles control what they can do: `viewer` reads, `editor` also edits and uploads, `admin` also approves proposals. List people under `web.admins` and `web.editors`; everyone else gets `web.default_role`. The MCP endpoint keeps its own bearer-token auth, independent of the web header.
 
 ### Appearance and tuning
 
@@ -208,6 +210,7 @@ Optional settings live in `<dir>/.waqwaq/config.json`. Every field is optional, 
   "addr": "127.0.0.1:8000",
   "review": false,
   "webhook": "https://hooks.slack.com/services/XXX",
+  "web": { "proxy_header": "X-Forwarded-User", "default_role": "viewer", "admins": ["adam"], "editors": ["dev"] },
   "lint": {
     "require_frontmatter": ["owner"],
     "banned_terms": [

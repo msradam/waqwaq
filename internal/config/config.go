@@ -18,7 +18,18 @@ type Config struct {
 	Addr    string     `json:"addr"`    // default listen address
 	Review  bool       `json:"review"`  // default to queuing writes for review
 	Webhook string     `json:"webhook"` // URL notified when a write is queued for review
+	Web     Web        `json:"web"`     // web-UI access control
 	Lint    lint.Rules `json:"lint"`
+}
+
+// Web configures web-UI access control. When ProxyHeader is set, identity comes
+// from that reverse-proxy header (delegate SSO to the proxy); otherwise the UI
+// is open and trusts local/loopback access.
+type Web struct {
+	ProxyHeader string   `json:"proxy_header"`
+	DefaultRole string   `json:"default_role"` // viewer | editor | admin
+	Admins      []string `json:"admins"`
+	Editors     []string `json:"editors"`
 }
 
 func Default() Config {

@@ -118,7 +118,9 @@ func cmdServe(args []string) {
 	}
 
 	mcpSrv := mcpserver.New(st, q, reg, mcpserver.Options{ReadOnly: *readOnly, ForceReview: *forceReview, Rules: cfg.Lint, Search: searcher})
-	srv, err := server.New(st, render.New(), mcpSrv, reg, q, searcher, cfg.Lint, *readOnly, server.Site{
+	srv, err := server.New(st, render.New(), mcpSrv, reg, q, searcher, cfg.Lint, server.WebPolicy{
+		ProxyHeader: cfg.Web.ProxyHeader, DefaultRole: cfg.Web.DefaultRole, Admins: cfg.Web.Admins, Editors: cfg.Web.Editors,
+	}, *readOnly, server.Site{
 		Title: cfg.Title, Accent: cfg.Accent, Theme: cfg.Theme,
 	})
 	if err != nil {
@@ -145,6 +147,9 @@ func cmdServe(args []string) {
 	log.Printf("waqwaq %s  ·  %s  ·  %s  ·  pages from %s", version, st.Root(), mode, st.Layout())
 	log.Printf("  web UI : http://%s/", *addr)
 	log.Printf("  MCP    : http://%s/mcp   (auth: %s, writes: %s)", *addr, authMode, policy)
+	if cfg.Web.ProxyHeader != "" {
+		log.Printf("  web auth: identity from proxy header %q", cfg.Web.ProxyHeader)
+	}
 
 	go func() {
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

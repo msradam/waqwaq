@@ -37,6 +37,35 @@ type Site struct {
 	Theme  string
 }
 
+// WebPolicy configures web-UI access. When ProxyHeader is set, identity is read
+// from that header (login and SSO are handled by the reverse proxy in front).
+type WebPolicy struct {
+	ProxyHeader string
+	DefaultRole string
+	Admins      []string
+	Editors     []string
+}
+
+type Role int
+
+const (
+	RoleNone Role = iota
+	RoleViewer
+	RoleEditor
+	RoleAdmin
+)
+
+func parseRole(s string) Role {
+	switch s {
+	case "admin":
+		return RoleAdmin
+	case "editor":
+		return RoleEditor
+	default:
+		return RoleViewer
+	}
+}
+
 type Server struct {
 	store     *store.Store
 	renderer  *render.Renderer
@@ -46,6 +75,7 @@ type Server struct {
 	queue     *review.Queue
 	search    search.Searcher
 	rules     lint.Rules
+	web       WebPolicy
 	readOnly  bool
 	title     string
 	accent    string
@@ -53,7 +83,7 @@ type Server struct {
 	customCSS string // path to .waqwaq/custom.css, or "" if absent
 }
 
-func New(st *store.Store, rnd *render.Renderer, mcpSrv *mcp.Server, reg *auth.Registry, q *review.Queue, searcher search.Searcher, rules lint.Rules, readOnly bool, site Site) (*Server, error) {
+func New(st *store.Store, rnd *render.Renderer, mcpSrv *mcp.Server, reg *auth.Registry, q *review.Queue, searcher search.Searcher, rules lint.Rules, web WebPolicy, readOnly bool, site Site) (*Server, error) {
 	tmpl, err := template.ParseFS(assets, "web/templates/*.html")
 	if err != nil {
 		return nil, err
@@ -74,9 +104,62 @@ func New(st *store.Store, rnd *render.Renderer, mcpSrv *mcp.Server, reg *auth.Re
 		searcher = st
 	}
 	return &Server{
-		store: st, renderer: rnd, tmpl: tmpl, mcp: mcpSrv, auth: reg, queue: q, search: searcher, rules: rules, readOnly: readOnly,
+		store: st, renderer: rnd, tmpl: tmpl, mcp: mcpSrv, auth: reg, queue: q, search: searcher, rules: rules, web: web, readOnly: readOnly,
 		title: title, accent: site.Accent, theme: theme, customCSS: custom,
 	}, nil
+}
+
+func (s *Server) webEnabled() bool { return s.web.ProxyHeader != "" }
+
+// role returns the caller's role. In open mode (no proxy header) it falls back
+// to the local/trusted check: loopback or a trusted token is admin, everyone
+// else is a viewer. With a proxy header it maps the header identity to a role.
+func (s *Server) role(r *http.Request) Role {
+	if !s.webEnabled() {
+		if s.canReview(r) {
+			return RoleAdmin
+		}
+		return RoleViewer
+	}
+	user := strings.TrimSpace(r.Header.Get(s.web.ProxyHeader))
+	if user == "" {
+		return RoleNone
+	}
+	for _, a := range s.web.Admins {
+		if a == user {
+			return RoleAdmin
+		}
+	}
+	for _, e := range s.web.Editors {
+		if e == user {
+			return RoleEditor
+		}
+	}
+	if s.web.DefaultRole != "" {
+		return parseRole(s.web.DefaultRole)
+	}
+	return RoleViewer
+}
+
+// webGuard requires an authenticated viewer for the human UI when a proxy header
+// is configured. Health checks, MCP (its own token auth), and static assets are
+// exempt.
+func (s *Server) webGuard(next http.Handler) http.Handler {
+	if !s.webEnabled() {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		if p == "/healthz" || p == "/mcp" || strings.HasPrefix(p, "/mcp/") || strings.HasPrefix(p, "/static/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if s.role(r) == RoleNone {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) Handler() http.Handler {
@@ -107,7 +190,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/search", s.handleSearch)
 	mux.HandleFunc("/wiki/", s.handlePage)
 	mux.HandleFunc("/", s.handleIndex)
-	return mux
+	return s.webGuard(mux)
 }
 
 // canReview reports whether a request may approve or reject proposals. Local
@@ -225,7 +308,7 @@ func markNav(nodes []*navNode, active string) {
 // handleUpload accepts a multipart file (images/pdf) from the editor, stores it
 // as a content-addressed asset, and returns its URL. Gated like editing.
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
-	if s.readOnly || !s.canReview(r) {
+	if s.readOnly || s.role(r) < RoleEditor {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -363,8 +446,8 @@ func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server is read-only", http.StatusForbidden)
 		return
 	}
-	if !s.canReview(r) {
-		http.Error(w, "editing requires local access or a trusted token", http.StatusForbidden)
+	if s.role(r) < RoleEditor {
+		http.Error(w, "editing requires editor access", http.StatusForbidden)
 		return
 	}
 	slug := strings.Trim(strings.TrimPrefix(r.URL.Path, "/edit/"), "/")
@@ -524,8 +607,8 @@ func (s *Server) handleProposal(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "server is read-only", http.StatusForbidden)
 			return
 		}
-		if !s.canReview(r) {
-			http.Error(w, "review actions require local access or a trusted token", http.StatusForbidden)
+		if s.role(r) < RoleAdmin {
+			http.Error(w, "approving requires admin access", http.StatusForbidden)
 			return
 		}
 		var err error
