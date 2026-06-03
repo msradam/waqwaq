@@ -1,0 +1,6 @@
+/waqwaq
+/dist/
+*.test
+
+# git repo created at runtime when serving an example in place
+examples/*/.git/

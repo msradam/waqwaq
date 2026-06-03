@@ -1,0 +1,39 @@
+{{define "page.html"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · Waqwaq</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="/">🌳 Waqwaq</a>
+    <form class="search" action="/search" method="get" role="search">
+      <input type="search" name="q" placeholder="Search…" value="{{.Query}}" aria-label="Search">
+    </form>
+    <nav>
+      {{range .Pages}}<a class="nav-link{{if eq .Slug $.Slug}} active{{end}}" href="/wiki/{{.Slug}}">{{.Title}}</a>
+      {{else}}<span class="muted">No pages yet.</span>{{end}}
+    </nav>
+  </aside>
+  <main class="content">
+    {{if .IsSearch}}
+      <h1>Search</h1>
+      {{if .Query}}<p class="muted">{{len .Hits}} result(s) for “{{.Query}}”.</p>{{end}}
+      <ul class="results">
+        {{range .Hits}}<li><a href="/wiki/{{.Slug}}">{{.Title}}</a><p class="muted snippet">{{.Snippet}}</p></li>
+        {{else}}<li class="muted">No matches.</li>{{end}}
+      </ul>
+    {{else}}
+      <article class="markdown">{{.Content}}</article>
+    {{end}}
+  </main>
+</div>
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: true, theme: 'neutral' });
+</script>
+</body>
+</html>{{end}}
