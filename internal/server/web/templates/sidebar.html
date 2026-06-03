@@ -4,6 +4,8 @@
 {{if .CustomCSS}}<link rel="stylesheet" href="/custom.css">{{end}}
 {{end}}
 
+{{define "navtree"}}{{range .}}{{if .Children}}<details class="nav-folder"{{if .Open}} open{{end}}><summary>{{if .Slug}}<a href="/wiki/{{.Slug}}"{{if .Active}} class="active"{{end}}>{{.Title}}</a>{{else}}{{.Name}}{{end}}</summary><div class="nav-children">{{template "navtree" .Children}}</div></details>{{else}}<a class="nav-link{{if .Active}} active{{end}}" href="/wiki/{{.Slug}}">{{.Title}}</a>{{end}}{{end}}{{end}}
+
 {{define "sidebar"}}
 <aside class="sidebar">
   <a class="brand" href="/">🌳 {{.SiteTitle}}</a>
@@ -12,8 +14,7 @@
   </form>
   <a class="nav-link section{{if eq .Active "proposals"}} active{{end}}" href="/proposals">Proposals{{if .Pending}} <span class="badge">{{.Pending}}</span>{{end}}</a>
   <nav>
-    {{range .Pages}}<a class="nav-link{{if eq .Slug $.Active}} active{{end}}" href="/wiki/{{.Slug}}">{{.Title}}</a>
-    {{else}}<span class="muted">No pages yet.</span>{{end}}
+    {{if .Nav}}{{template "navtree" .Nav}}{{else}}<span class="muted">No pages yet.</span>{{end}}
   </nav>
 </aside>
 {{end}}

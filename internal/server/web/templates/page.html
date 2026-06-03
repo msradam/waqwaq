@@ -19,8 +19,21 @@
       </ul>
     {{else}}
       <article class="markdown">{{.Content}}</article>
+      {{if .Attribution}}
+      <footer class="attribution">
+        Last touched by <strong>{{.Attribution.Author}}</strong>{{if .Attribution.Approver}}, approved by <strong>{{.Attribution.Approver}}</strong>{{end}}{{if .Attribution.When}} · {{.Attribution.When}}{{end}}
+      </footer>
+      {{end}}
     {{end}}
   </main>
+  {{if and (not .IsSearch) .TOC}}
+  <aside class="toc-rail">
+    <p class="toc-title">On this page</p>
+    <nav>
+      {{range .TOC}}<a class="toc-l{{.Level}}" href="#{{.ID}}">{{.Text}}</a>{{end}}
+    </nav>
+  </aside>
+  {{end}}
 </div>
 <script type="module">
   import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';

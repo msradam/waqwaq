@@ -98,7 +98,7 @@ Layout:
 - Raw documents live in `<dir>/raw`.
 - `<dir>/CLAUDE.md`, if present, is sent to MCP clients as the server instructions, so an agent reads the wiki's schema before it writes.
 
-Pages are markdown with optional YAML frontmatter. A `title` field sets the page title; without one, the first heading or the file name is used. Link between pages with `[[slug]]` or `[[slug|label]]` wikilinks. Fenced `mermaid` blocks render as diagrams, and fenced code blocks are syntax highlighted.
+Pages are markdown with optional YAML frontmatter. A `title` field sets the page title; without one, the first heading or the file name is used. Link between pages with `[[slug]]` or `[[slug|label]]` wikilinks. Fenced `mermaid` blocks render as diagrams, fenced code blocks are syntax highlighted, and `> [!NOTE]` or `> [!WARNING]` blockquotes render as callouts (the GitHub and Obsidian convention). Headings get anchor links and a right-rail table of contents, the sidebar groups pages into a collapsible tree, and each page footer shows who last touched it, including the proposer and approver for reviewed writes.
 
 ### Review and access control
 

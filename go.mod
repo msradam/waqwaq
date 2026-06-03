@@ -6,6 +6,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/yuin/goldmark v1.8.2
 	github.com/yuin/goldmark-highlighting/v2 v2.0.0-20230729083705-37449abec8cc
+	go.abhg.dev/goldmark/anchor v0.2.0
 	go.abhg.dev/goldmark/mermaid v0.6.0
 	go.abhg.dev/goldmark/wikilink v0.6.0
 	gopkg.in/yaml.v3 v3.0.1

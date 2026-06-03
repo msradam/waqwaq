@@ -4,12 +4,14 @@
 package server
 
 import (
+	"fmt"
 	"html/template"
 	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -107,7 +109,7 @@ func (s *Server) authWrap(next http.Handler) http.Handler {
 }
 
 type chrome struct {
-	Pages     []store.PageMeta
+	Nav       []*navNode
 	Pending   int
 	Query     string
 	Active    string
@@ -122,8 +124,65 @@ func (s *Server) chrome(active, query string) chrome {
 	pages, _ := s.store.List()
 	pending, _ := s.queue.PendingCount()
 	return chrome{
-		Pages: pages, Pending: pending, Query: query, Active: active, ReadOnly: s.readOnly,
+		Nav: buildNav(pages, active), Pending: pending, Query: query, Active: active, ReadOnly: s.readOnly,
 		SiteTitle: s.title, Accent: s.accent, Theme: s.theme, CustomCSS: s.customCSS != "",
+	}
+}
+
+// navNode is a node in the sidebar tree: a folder (Children), a page (Slug), or
+// both (a page that also has children under it).
+type navNode struct {
+	Name     string
+	Path     string
+	Slug     string
+	Title    string
+	Children []*navNode
+	Open     bool
+	Active   bool
+}
+
+func buildNav(metas []store.PageMeta, active string) []*navNode {
+	root := &navNode{}
+	for _, m := range metas {
+		cur := root
+		path := ""
+		parts := strings.Split(m.Slug, "/")
+		for i, part := range parts {
+			if path == "" {
+				path = part
+			} else {
+				path += "/" + part
+			}
+			child := childByName(cur, part)
+			if child == nil {
+				child = &navNode{Name: part, Path: path}
+				cur.Children = append(cur.Children, child)
+			}
+			if i == len(parts)-1 {
+				child.Slug = m.Slug
+				child.Title = m.Title
+			}
+			cur = child
+		}
+	}
+	markNav(root.Children, active)
+	return root.Children
+}
+
+func childByName(parent *navNode, name string) *navNode {
+	for _, c := range parent.Children {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
+}
+
+func markNav(nodes []*navNode, active string) {
+	for _, n := range nodes {
+		n.Active = n.Slug != "" && n.Slug == active
+		n.Open = active == n.Path || strings.HasPrefix(active, n.Path+"/")
+		markNav(n.Children, active)
 	}
 }
 
@@ -137,13 +196,21 @@ func (s *Server) handleCustomCSS(w http.ResponseWriter, r *http.Request) {
 }
 
 type pageView struct {
-	Chrome   chrome
-	Title    string
-	Content  template.HTML
-	Slug     string
-	IsSearch bool
-	Query    string
-	Hits     []store.SearchHit
+	Chrome      chrome
+	Title       string
+	Content     template.HTML
+	Slug        string
+	TOC         []render.TOCEntry
+	Attribution *attributionView
+	IsSearch    bool
+	Query       string
+	Hits        []store.SearchHit
+}
+
+type attributionView struct {
+	Author   string
+	Approver string
+	When     string
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -185,12 +252,35 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) renderPage(w http.ResponseWriter, page *store.Page) {
-	html, err := s.renderer.Render(page.Body)
+	html, toc, err := s.renderer.Render(page.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.exec(w, "page.html", pageView{Chrome: s.chrome(page.Slug, ""), Title: page.Title, Content: html, Slug: page.Slug})
+	var attr *attributionView
+	if a, ok := s.store.LastTouched(page.Slug); ok {
+		attr = &attributionView{Author: a.Author, Approver: a.Approver, When: relativeTime(a.When)}
+	}
+	s.exec(w, "page.html", pageView{Chrome: s.chrome(page.Slug, ""), Title: page.Title, Content: html, Slug: page.Slug, TOC: toc, Attribution: attr})
+}
+
+func relativeTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	case d < 48*time.Hour:
+		return "yesterday"
+	default:
+		return fmt.Sprintf("%d days ago", int(d.Hours()/24))
+	}
 }
 
 type proposalsView struct {

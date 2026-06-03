@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -394,6 +395,47 @@ func (s *Store) commit(message, author string) error {
 		return fmt.Errorf("git commit: %v: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return nil
+}
+
+type Attribution struct {
+	Author   string
+	Approver string
+	When     time.Time
+}
+
+var approverRe = regexp.MustCompile(`approved by (\S+)`)
+
+// LastTouched returns the last commit that changed a page: its author (the
+// proposer, for a merged proposal), the approver parsed from the commit
+// message, and the time. It reports false when there is no git history.
+func (s *Store) LastTouched(slug string) (*Attribution, bool) {
+	if !s.git {
+		return nil, false
+	}
+	p, err := s.pathFor(slug)
+	if err != nil {
+		return nil, false
+	}
+	rel, err := filepath.Rel(s.gitRoot, p)
+	if err != nil {
+		return nil, false
+	}
+	cmd := exec.Command("git", "log", "-1", "--format=%an%x1f%aI%x1f%s", "--", rel)
+	cmd.Dir = s.gitRoot
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, false
+	}
+	parts := strings.SplitN(strings.TrimSpace(string(out)), "\x1f", 3)
+	if len(parts) < 3 {
+		return nil, false
+	}
+	when, _ := time.Parse(time.RFC3339, parts[1])
+	a := &Attribution{Author: parts[0], When: when}
+	if m := approverRe.FindStringSubmatch(parts[2]); m != nil {
+		a.Approver = m[1]
+	}
+	return a, true
 }
 
 // SplitFrontmatter separates a leading YAML frontmatter block (--- ... ---)
