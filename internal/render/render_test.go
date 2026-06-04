@@ -42,6 +42,20 @@ func TestWikilinkBasePrefix(t *testing.T) {
 	}
 }
 
+func TestWikilinkAnchorFragment(t *testing.T) {
+	html, _, err := New("").Render("jump to [[setup#Some Heading]] and [[#Local Bit]]\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := string(html)
+	if !strings.Contains(h, `href="/wiki/setup#some-heading"`) {
+		t.Errorf("heading fragment should be slugified to #some-heading:\n%s", h)
+	}
+	if !strings.Contains(h, `href="#local-bit"`) {
+		t.Errorf("same-page [[#anchor]] should resolve to #local-bit:\n%s", h)
+	}
+}
+
 func TestPlainBlockquoteUntouched(t *testing.T) {
 	r := New("")
 	html, _, err := r.Render("> just a quote\n")

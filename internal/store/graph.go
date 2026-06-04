@@ -53,8 +53,15 @@ func (s *Store) graphData() ([]PageMeta, []GraphEdge, []BrokenLink, error) {
 		if err != nil {
 			continue
 		}
+		body := stripCode(page.Body)
 		seenTo := map[string]bool{}
-		for _, lk := range wikiLinks(stripCode(page.Body)) {
+		addEdge := func(canon string) {
+			if canon != "" && canon != m.Slug && !seenTo[canon] {
+				seenTo[canon] = true
+				edges = append(edges, GraphEdge{From: m.Slug, To: canon})
+			}
+		}
+		for _, lk := range wikiLinks(body) {
 			if lk.embed {
 				continue // image/note transclusions are content, not page edges
 			}
@@ -66,11 +73,13 @@ func (s *Store) graphData() ([]PageMeta, []GraphEdge, []BrokenLink, error) {
 				}
 				continue
 			}
-			if canon == m.Slug || seenTo[canon] {
-				continue
-			}
-			seenTo[canon] = true
-			edges = append(edges, GraphEdge{From: m.Slug, To: canon})
+			addEdge(canon)
+		}
+		// Plain markdown links to internal pages also count as edges (GitHub wikis
+		// and hand-written wikis link this way), but a missing one is not flagged
+		// as broken, since markdown links to external files are common and benign.
+		for _, t := range markdownLinkTargets(body) {
+			addEdge(resolver.resolve(t))
 		}
 	}
 	s.graphSig, s.graphMetas, s.graphEdges, s.graphBroken = sig, metas, edges, broken
@@ -206,8 +215,34 @@ func wikiLinks(body string) []wlink {
 var (
 	fenceRe   = regexp.MustCompile("(?s)```.*?```|~~~.*?~~~")
 	icodeRe   = regexp.MustCompile("`[^`\n]*`")
+	mdLinkRe  = regexp.MustCompile(`\[[^\]]*\]\(([^)\s]+)`)
 	assetExts = []string{".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".pdf", ".mp4", ".mov", ".webm", ".canvas", ".base", ".excalidraw"}
 )
+
+// markdownLinkTargets returns the internal page targets of [text](target) links,
+// skipping images, anchors, external URLs, and asset files. Targets are cleaned
+// to a slug candidate (no ./, no .md, no #fragment) for the resolver.
+func markdownLinkTargets(body string) []string {
+	var out []string
+	for _, loc := range mdLinkRe.FindAllStringSubmatchIndex(body, -1) {
+		if loc[0] > 0 && body[loc[0]-1] == '!' {
+			continue // image
+		}
+		t := body[loc[2]:loc[3]]
+		if t == "" || strings.HasPrefix(t, "#") || strings.HasPrefix(t, "mailto:") || strings.Contains(t, "://") {
+			continue
+		}
+		if i := strings.IndexByte(t, '#'); i >= 0 {
+			t = t[:i]
+		}
+		t = strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(t, "./"), "/"), ".md")
+		if t == "" || isAssetRef(t) {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
 
 // stripCode removes fenced and inline code so wikilink syntax shown as an
 // example in documentation is not mistaken for a real link.

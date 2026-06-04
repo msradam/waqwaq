@@ -10,6 +10,7 @@ import (
 	"html/template"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/yuin/goldmark"
 	highlighting "github.com/yuin/goldmark-highlighting/v2"
@@ -161,10 +162,29 @@ func stripLeading(para ast.Node, n int) {
 type wikiResolver struct{ base string }
 
 func (w wikiResolver) ResolveWikilink(n *wikilink.Node) ([]byte, error) {
+	if len(n.Target) == 0 && len(n.Fragment) > 0 { // same-page [[#heading]]
+		return append([]byte("#"), slugFragment(string(n.Fragment))...), nil
+	}
 	dest := append([]byte(w.base+"/wiki/"), n.Target...)
 	if len(n.Fragment) > 0 {
 		dest = append(dest, '#')
-		dest = append(dest, n.Fragment...)
+		dest = append(dest, slugFragment(string(n.Fragment))...)
 	}
 	return dest, nil
+}
+
+// slugFragment turns a wikilink heading fragment ([[Page#Some Heading]]) into the
+// id goldmark generates for that heading (lowercase, spaces to hyphens, other
+// punctuation dropped without collapsing), so the anchor actually lands.
+func slugFragment(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			b.WriteRune(r)
+		case r == ' ' || r == '-':
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
 }
