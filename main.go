@@ -34,6 +34,7 @@ import (
 	"github.com/msradam/waqwaq/internal/search"
 	"github.com/msradam/waqwaq/internal/server"
 	"github.com/msradam/waqwaq/internal/store"
+	"github.com/msradam/waqwaq/internal/tui"
 )
 
 const version = "0.2.0"
@@ -61,6 +62,8 @@ func main() {
 		cmdGrep(os.Args[2:])
 	case "cat":
 		cmdCat(os.Args[2:])
+	case "tui":
+		cmdTUI(os.Args[2:])
 	case "passwd":
 		cmdPasswd(os.Args[2:])
 	case "version", "-v", "--version":
@@ -84,6 +87,7 @@ usage:
   waqwaq toc    [dir]                 list pages as slug<tab>title (greppable)
   waqwaq grep   <query> [dir]         full-text search; --tag, --links-to scope it
   waqwaq cat    <slug> [dir]          print a page; --render for terminal markdown
+  waqwaq tui    [dir]                 browse the wiki in a terminal reader
   waqwaq passwd [password]            print a bcrypt hash for a web.users entry
   waqwaq version
 
@@ -522,6 +526,19 @@ func printJSON(v any) {
 func remoteFlags(fs *flag.FlagSet) (*string, *string) {
 	return fs.String("remote", os.Getenv("WAQWAQ_REMOTE"), "query a remote waqwaq server URL instead of a local dir"),
 		fs.String("token", os.Getenv("WAQWAQ_TOKEN"), "bearer token for --remote")
+}
+
+func cmdTUI(args []string) {
+	fs := flag.NewFlagSet("tui", flag.ExitOnError)
+	remote, token := remoteFlags(fs)
+	rest := parseArgs(fs, args)
+	base, err := kbFor(*remote, *token, argAt(rest, 0))
+	if err != nil {
+		log.Fatalf("tui: %v", err)
+	}
+	if err := tui.Run(base); err != nil {
+		log.Fatalf("tui: %v", err)
+	}
 }
 
 func cmdTOC(args []string) {

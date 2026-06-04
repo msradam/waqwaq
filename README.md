@@ -181,6 +181,8 @@ waqwaq grep "timeout" ./wiki --links-to services/payments   # graph-scoped searc
 
 `grep` ranks with the same index the web search uses, and `--tag` / `--links-to` scope it to the pages the frontmatter or link graph selects, which a plain text search cannot express. Add `--json` to any verb for scripting.
 
+For interactive browsing, `waqwaq tui [dir]` opens a terminal reader: a page list you can filter, full-text search (`s`), the page rendered for the terminal, and a related panel to walk the link graph (`r`). It takes `--remote` too.
+
 These verbs run against a local folder, or against a running server by URL:
 
 ```bash
