@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="noun-tree-8262937.png" alt="" width="84">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="noun-tree-dark.png">
+    <img src="noun-tree-light.png" alt="" width="84">
+  </picture>
 </p>
 
 # Waqwaq
