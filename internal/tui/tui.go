@@ -4,7 +4,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -40,35 +39,51 @@ type Model struct {
 	all      []list.Item
 	cur      string
 	curBody  string
-	focus    int // 0 list, 1 content
+	body     string // rendered page body, before the async related footer is appended
+	focus    int    // 0 list, 1 content
 	typing   bool
 	w, h     int
-	ready    bool
+	ready    bool // a window size is known
+	loaded   bool // the page list has arrived
+	opened   bool // the initial page has been opened
 	status   string
 	style    string // glamour style: "dark" or "light", detected once
 	renderer *glamour.TermRenderer
 	renderW  int
 }
 
+// pagesMsg carries the page list loaded off the render loop; footerMsg carries a
+// page's backlinks and neighbors, computed off the render loop because the first
+// such call builds the whole link graph.
+type (
+	pagesMsg  struct{ items []list.Item }
+	footerMsg struct {
+		slug string
+		text string
+	}
+	errMsg struct{ err error }
+)
+
 func New(base kb.KnowledgeBase) (Model, error) {
-	metas, err := base.List()
-	if err != nil {
-		return Model{}, err
-	}
-	if len(metas) == 0 {
-		return Model{}, fmt.Errorf("no markdown pages found here; waqwaq indexes .md files")
-	}
-	its := toItems(metas)
-	l := list.New(its, list.NewDefaultDelegate(), 0, 0)
-	l.Title = "Pages"
+	l := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	l.Title = "Loading…"
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
 	ti := textinput.New()
 	ti.Placeholder = "full-text search"
-	return Model{base: base, list: l, vp: viewport.New(0, 0), search: ti, all: its}, nil
+	return Model{base: base, list: l, vp: viewport.New(0, 0), search: ti, status: "Loading pages…"}, nil
 }
 
-func (m Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd {
+	base := m.base
+	return func() tea.Msg {
+		metas, err := base.List()
+		if err != nil {
+			return errMsg{err}
+		}
+		return pagesMsg{toItems(metas)}
+	}
+}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
@@ -78,10 +93,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.layout()
 		if !m.ready {
 			m.ready = true
-			m.openInitial()
+			cmds = append(cmds, m.maybeOpenInitial())
 		} else if m.cur != "" {
 			m.render(m.cur)
+			cmds = append(cmds, m.footerCmd(m.cur))
 		}
+	case pagesMsg:
+		m.loaded = true
+		m.all = msg.items
+		m.list.SetItems(msg.items)
+		if len(msg.items) == 0 {
+			m.list.Title = "No pages"
+			m.status = "no markdown pages found here"
+		} else {
+			m.list.Title = "Pages"
+		}
+		cmds = append(cmds, m.maybeOpenInitial())
+	case footerMsg:
+		if msg.slug == m.cur {
+			m.vp.SetContent(m.body + msg.text)
+		}
+	case errMsg:
+		m.loaded = true
+		m.status = msg.err.Error()
 	case tea.KeyMsg:
 		if m.typing {
 			switch msg.String() {
@@ -125,7 +159,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter", "l":
 			if m.focus == 0 {
 				if it, ok := m.list.SelectedItem().(item); ok {
-					m.open(it.slug)
+					cmds = append(cmds, m.open(it.slug))
 					m.focus = 1
 				}
 			}
@@ -153,19 +187,24 @@ func (m *Model) layout() {
 	m.vp.Height = bodyH - 1 // one line for the content-pane header
 }
 
-func (m *Model) openInitial() {
+// maybeOpenInitial opens the landing page once both the window size and the page
+// list are known, returning the command that loads its related footer.
+func (m *Model) maybeOpenInitial() tea.Cmd {
+	if !m.ready || !m.loaded || m.opened || len(m.all) == 0 {
+		return nil
+	}
+	m.opened = true
+	slug := m.all[0].(item).slug
 	for _, it := range m.all {
 		if it.(item).slug == "index" {
-			m.open("index")
-			return
+			slug = "index"
+			break
 		}
 	}
-	if len(m.all) > 0 {
-		m.open(m.all[0].(item).slug)
-	}
+	return m.open(slug)
 }
 
-func (m *Model) open(slug string) {
+func (m *Model) open(slug string) tea.Cmd {
 	page, err := m.base.Read(slug)
 	if err != nil {
 		if canon, ok := m.base.ResolveLink(slug); ok {
@@ -174,10 +213,20 @@ func (m *Model) open(slug string) {
 	}
 	if err != nil || page == nil {
 		m.status = "not found: " + slug
-		return
+		return nil
 	}
 	m.cur, m.curBody = page.Slug, page.Body
 	m.render(m.cur)
+	return m.footerCmd(m.cur)
+}
+
+// footerCmd computes a page's backlinks and neighbors off the render loop, since
+// the first such call on a cold store builds the entire link graph.
+func (m *Model) footerCmd(slug string) tea.Cmd {
+	base := m.base
+	return func() tea.Msg {
+		return footerMsg{slug: slug, text: relatedFooter(base, slug)}
+	}
 }
 
 // ensureRenderer builds the Glamour renderer once per width. WithStandardStyle
@@ -208,21 +257,21 @@ func (m *Model) render(slug string) {
 			out = s
 		}
 	}
-	out += m.relatedFooter(slug)
+	m.body = out
 	m.vp.SetContent(out)
 	m.vp.GotoTop()
 	m.status = slug
 }
 
-func (m *Model) relatedFooter(slug string) string {
+func relatedFooter(base kb.KnowledgeBase, slug string) string {
 	var b strings.Builder
-	if bl, _ := m.base.Backlinks(slug); len(bl) > 0 {
+	if bl, _ := base.Backlinks(slug); len(bl) > 0 {
 		b.WriteString("\n  ── backlinks ──\n")
 		for _, p := range bl {
 			b.WriteString("  ← " + p.Slug + "\n")
 		}
 	}
-	if nb, _ := m.base.Neighbors(slug, 1); len(nb) > 0 {
+	if nb, _ := base.Neighbors(slug, 1); len(nb) > 0 {
 		b.WriteString("\n  ── related (press r to walk) ──\n")
 		for _, n := range nb {
 			b.WriteString("  • " + n.Slug + "\n")

@@ -788,6 +788,9 @@ func cmdTUI(args []string) {
 	if err != nil {
 		log.Fatalf("tui: %v", err)
 	}
+	if st, ok := base.(*store.Store); ok {
+		go st.Warm() // build the graph in the background so the first page's footer is ready
+	}
 	if err := tui.Run(base); err != nil {
 		log.Fatalf("tui: %v", err)
 	}

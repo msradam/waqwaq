@@ -30,9 +30,13 @@ func TestModelOpensAndWalksGraph(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The first window size makes it ready and auto-opens the index page.
-	model, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	// The page list loads off the render loop; run that command and deliver it.
+	model, _ := m.Update(m.Init()())
 	mm := model.(Model)
+
+	// The first window size makes it ready and auto-opens the index page.
+	model, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	mm = model.(Model)
 	if !mm.ready || mm.cur != "index" {
 		t.Fatalf("ready=%v cur=%q, want ready index", mm.ready, mm.cur)
 	}
