@@ -115,20 +115,17 @@ func (ix *Index) refresh() error {
 	return nil
 }
 
-// buildMatch turns free text into a safe FTS5 prefix-AND query. It keeps only
-// letters and digits per token, so arbitrary input cannot inject FTS operators.
+// buildMatch turns free text into a safe FTS5 prefix-AND query. It splits on any
+// non-alphanumeric run, so a qualified identifier like `sync.Pool` or `wiki_write`
+// becomes its component prefix terms (`sync* pool*`), matching the way unicode61
+// tokenizes the indexed body. Keeping only letters and digits also means
+// arbitrary input cannot inject FTS operators.
 func buildMatch(query string) string {
 	var terms []string
-	for _, field := range strings.Fields(query) {
-		clean := strings.Map(func(r rune) rune {
-			if unicode.IsLetter(r) || unicode.IsDigit(r) {
-				return unicode.ToLower(r)
-			}
-			return -1
-		}, field)
-		if clean != "" {
-			terms = append(terms, clean+"*")
-		}
+	for _, field := range strings.FieldsFunc(query, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		terms = append(terms, strings.ToLower(field)+"*")
 	}
 	return strings.Join(terms, " ")
 }

@@ -6,6 +6,33 @@ import (
 	"github.com/msradam/waqwaq/internal/store"
 )
 
+func TestQualifiedIdentifierSearch(t *testing.T) {
+	st, err := store.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write("ctx", "---\ntitle: Context\n---\nThe Context is pooled with sync.Pool and reset per request.\n", "", "m"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write("mcp", "---\ntitle: MCP\n---\nThe wiki_write tool commits a page.\n", "", "m"); err != nil {
+		t.Fatal(err)
+	}
+	ix, err := New(st)
+	if err != nil {
+		t.Skipf("FTS5 unavailable in this build: %v", err)
+	}
+	defer ix.Close()
+
+	for _, q := range []string{"sync.Pool", "sync_pool", "Context.reset()"} {
+		if hits, _ := ix.Search(q); len(hits) != 1 || hits[0].Slug != "ctx" {
+			t.Fatalf("search %q = %+v, want one hit on ctx", q, hits)
+		}
+	}
+	if hits, _ := ix.Search("wiki_write"); len(hits) != 1 || hits[0].Slug != "mcp" {
+		t.Fatalf("search 'wiki_write' = %+v, want one hit on mcp", hits)
+	}
+}
+
 func TestFTSSearchAndRefresh(t *testing.T) {
 	st, err := store.New(t.TempDir())
 	if err != nil {
