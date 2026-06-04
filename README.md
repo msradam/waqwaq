@@ -15,6 +15,21 @@ Waqwaq serves a folder of markdown two ways at once: a web UI for people to read
 
 The native layout is Andrej Karpathy's LLM wiki convention: pages under `wiki/`, raw documents under `raw/`, a `CLAUDE.md` schema at the root. Point it at a folder with no `wiki/` subdirectory and it serves the folder itself, so an existing notes folder or Obsidian vault works as is.
 
+## Demo
+
+A terminal reader over your wiki; press `r` to walk a page's links.
+
+<p align="center"><img src="demo/tui.gif" width="760" alt="terminal reader"></p>
+
+Scriptable verbs (`toc`, `grep`, `cat --render`), and a `doctor` that checks the setup and the MCP/access posture.
+
+<p align="center"><img src="demo/cli.gif" width="760" alt="CLI verbs"></p>
+<p align="center"><img src="demo/doctor.gif" width="760" alt="doctor diagnostic"></p>
+
+Generate a wiki from a codebase: one page per package, linked by the real import graph.
+
+<p align="center"><img src="demo/scan.gif" width="760" alt="scan a Go module"></p>
+
 ## Quickstart
 
 ```bash
