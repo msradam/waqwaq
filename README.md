@@ -192,6 +192,18 @@ WAQWAQ_REMOTE=http://host:8000 waqwaq cat deploy --render
 
 Local and remote go through the same core, so the answers are identical. The web UI also serves a plain JSON read API at `/api` (`/api/pages`, `/api/search`, `/api/page/<slug>`, `/api/graph`, and the graph queries) for any other client.
 
+### Generate a wiki from a Go module
+
+`waqwaq scan <repo> <outdir>` turns a Go module into a wiki: one page per package, linked by the module's real import graph as `[[wikilinks]]`, with each package's doc comment as the page text and its exported API listed. It is deterministic, the structure comes from the code via `go/packages` (pure Go, no cgo), not from a model.
+
+```bash
+waqwaq scan . ./arch
+waqwaq tui ./arch        # browse it; press r to walk the dependency graph
+waqwaq serve ./arch      # or open /oracle for the dependency graph
+```
+
+The output is an ordinary Waqwaq wiki, so every surface (web, TUI, CLI, MCP) and the link graph work on it unchanged. Only Go modules are supported for now.
+
 ### Multiple wikis
 
 Pass more than one directory and each is served as a separate wiki under a path prefix:

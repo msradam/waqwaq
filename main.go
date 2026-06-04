@@ -26,6 +26,7 @@ import (
 
 	"github.com/msradam/waqwaq/internal/auth"
 	"github.com/msradam/waqwaq/internal/config"
+	"github.com/msradam/waqwaq/internal/ingest"
 	"github.com/msradam/waqwaq/internal/kb"
 	"github.com/msradam/waqwaq/internal/kbclient"
 	"github.com/msradam/waqwaq/internal/mcpserver"
@@ -54,6 +55,8 @@ func main() {
 		cmdIngest(os.Args[2:])
 	case "export":
 		cmdExport(os.Args[2:])
+	case "scan":
+		cmdScan(os.Args[2:])
 	case "mcp":
 		cmdMCP(os.Args[2:])
 	case "toc":
@@ -83,6 +86,7 @@ usage:
                                       serve web UI + MCP over one port
   waqwaq ingest <dir> <file>...       add raw documents to the wiki's raw/ area
   waqwaq export <dir> <outdir>        render the wiki to a static HTML site
+  waqwaq scan   <repo> <outdir>       generate a wiki from a Go module's import graph
   waqwaq mcp    [dir]                 serve MCP over stdio (for an agent subprocess)
   waqwaq toc    [dir]                 list pages as slug<tab>title (greppable)
   waqwaq grep   <query> [dir]         full-text search; --tag, --links-to scope it
@@ -526,6 +530,21 @@ func printJSON(v any) {
 func remoteFlags(fs *flag.FlagSet) (*string, *string) {
 	return fs.String("remote", os.Getenv("WAQWAQ_REMOTE"), "query a remote waqwaq server URL instead of a local dir"),
 		fs.String("token", os.Getenv("WAQWAQ_TOKEN"), "bearer token for --remote")
+}
+
+func cmdScan(args []string) {
+	fs := flag.NewFlagSet("scan", flag.ExitOnError)
+	rest := parseArgs(fs, args)
+	if len(rest) < 2 {
+		log.Fatal("usage: waqwaq scan <repo> <outdir>")
+	}
+	repo, out := rest[0], rest[1]
+	n, err := ingest.Go(repo, out)
+	if err != nil {
+		log.Fatalf("scan: %v", err)
+	}
+	fmt.Printf("Scanned %d packages into %s\n", n, filepath.Join(out, "wiki"))
+	fmt.Printf("Next: waqwaq tui %s   (or  waqwaq serve %s)\n", out, out)
 }
 
 func cmdTUI(args []string) {
