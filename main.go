@@ -30,6 +30,7 @@ import (
 	"github.com/msradam/waqwaq/internal/ingest"
 	"github.com/msradam/waqwaq/internal/kb"
 	"github.com/msradam/waqwaq/internal/kbclient"
+	"github.com/msradam/waqwaq/internal/lint"
 	"github.com/msradam/waqwaq/internal/mcpserver"
 	"github.com/msradam/waqwaq/internal/render"
 	"github.com/msradam/waqwaq/internal/review"
@@ -60,6 +61,8 @@ func main() {
 		cmdScan(os.Args[2:])
 	case "doctor":
 		cmdDoctor(os.Args[2:])
+	case "check":
+		cmdCheck(os.Args[2:])
 	case "mcp":
 		cmdMCP(os.Args[2:])
 	case "toc":
@@ -91,6 +94,7 @@ usage:
   waqwaq export <dir> <outdir>        render the wiki to a static HTML site
   waqwaq scan   <repo> <outdir>       generate a wiki from a Go module's import graph
   waqwaq doctor [dir]                 check a wiki's setup, MCP access, and health
+  waqwaq check  [dir] [--json] [--strict]   lint pages and links, for CI (non-zero on errors)
   waqwaq mcp    [dir]                 serve MCP over stdio (for an agent subprocess)
   waqwaq toc    [dir]                 list pages as slug<tab>title (greppable)
   waqwaq grep   <query> [dir]         full-text search; --tag, --links-to scope it
@@ -662,6 +666,99 @@ func reportDiags(out []diag) int {
 	}
 	fmt.Printf("\n%d problem(s), %d warning(s)\n", fails, warns)
 	return fails
+}
+
+type checkFinding struct {
+	Slug     string `json:"slug,omitempty"`
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
+}
+
+// runCheck lints every page and reports broken links, orphans, and stale pages.
+// It uses the resolved link graph for broken links (so basename and piped links
+// resolve), not lint's exact-match wikilink warning, which it drops.
+func runCheck(st *store.Store, rules lint.Rules) []checkFinding {
+	var out []checkFinding
+	metas, err := st.List()
+	if err != nil {
+		return out
+	}
+	known := make(map[string]bool, len(metas))
+	for _, m := range metas {
+		known[m.Slug] = true
+	}
+	for _, m := range metas {
+		page, err := st.Read(m.Slug)
+		if err != nil {
+			continue
+		}
+		for _, is := range lint.Check(page.Frontmatter, page.Body, known, rules) {
+			if strings.HasPrefix(is.Message, "wikilink ") {
+				continue
+			}
+			out = append(out, checkFinding{m.Slug, is.Severity, is.Message})
+		}
+	}
+	if h, err := st.Health(); err == nil {
+		for _, b := range h.Broken {
+			out = append(out, checkFinding{b.From, "error", "broken wikilink [[" + b.To + "]]"})
+		}
+		for _, o := range h.Orphans {
+			out = append(out, checkFinding{o.Slug, "warning", "orphan, nothing links here"})
+		}
+		for _, sp := range h.Stale {
+			out = append(out, checkFinding{sp.Slug, "warning", fmt.Sprintf("stale, untouched %d days", sp.Days)})
+		}
+	}
+	if len(metas) == 0 {
+		out = append(out, checkFinding{"", "error", "no markdown pages found"})
+	}
+	return out
+}
+
+func cmdCheck(args []string) {
+	fs := flag.NewFlagSet("check", flag.ExitOnError)
+	asJSON := fs.Bool("json", false, "emit findings as JSON")
+	strict := fs.Bool("strict", false, "treat warnings (orphans, stale) as failures too")
+	rest := parseArgs(fs, args)
+	dir := "."
+	if len(rest) > 0 {
+		dir = rest[0]
+	}
+	st, err := store.New(dir)
+	if err != nil {
+		log.Fatalf("check: %v", err)
+	}
+	cfg, _ := config.Load(filepath.Join(st.Root(), ".waqwaq", "config.json"))
+	findings := runCheck(st, cfg.Lint)
+
+	errs, warns := 0, 0
+	for _, f := range findings {
+		if f.Severity == "error" {
+			errs++
+		} else {
+			warns++
+		}
+	}
+	ok := errs == 0 && (!*strict || warns == 0)
+	if *asJSON {
+		printJSON(map[string]any{"errors": errs, "warnings": warns, "ok": ok, "findings": findings})
+	} else {
+		for _, f := range findings {
+			loc := f.Slug
+			if loc == "" {
+				loc = "(wiki)"
+			}
+			fmt.Printf("  %-7s %-26s %s\n", f.Severity, loc, f.Message)
+		}
+		if len(findings) == 0 {
+			fmt.Println("  no problems")
+		}
+		fmt.Printf("\n%d error(s), %d warning(s)\n", errs, warns)
+	}
+	if !ok {
+		os.Exit(1)
+	}
 }
 
 func cmdScan(args []string) {
