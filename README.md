@@ -127,6 +127,16 @@ The MCP endpoint speaks streamable HTTP. To use it from Claude Code, add a proje
 }
 ```
 
+Or run it as a stdio subprocess, with no server or port, which is the usual way a local agent mounts an MCP server:
+
+```json
+{
+  "mcpServers": {
+    "waqwaq": { "command": "waqwaq", "args": ["mcp", "/path/to/wiki"] }
+  }
+}
+```
+
 The server exposes these tools:
 
 - `wiki_list`, `wiki_read`, `wiki_search`, `wiki_graph` read the wiki.
@@ -156,6 +166,29 @@ waqwaq export ./wiki ./site
 ```
 
 Serve the output directory with any static file server.
+
+### Query from the terminal
+
+The same reads are scriptable commands, so you can stay in the shell:
+
+```bash
+waqwaq toc ./wiki                       # list pages as slug<tab>title
+waqwaq toc ./wiki | grep deploy         # find a page
+waqwaq cat deploy ./wiki --render       # rendered markdown in the terminal
+waqwaq grep "rollback" ./wiki           # full-text search
+waqwaq grep "timeout" ./wiki --links-to services/payments   # graph-scoped search
+```
+
+`grep` ranks with the same index the web search uses, and `--tag` / `--links-to` scope it to the pages the frontmatter or link graph selects, which a plain text search cannot express. Add `--json` to any verb for scripting.
+
+These verbs run against a local folder, or against a running server by URL:
+
+```bash
+waqwaq toc --remote http://host:8000 | grep service
+WAQWAQ_REMOTE=http://host:8000 waqwaq cat deploy --render
+```
+
+Local and remote go through the same core, so the answers are identical. The web UI also serves a plain JSON read API at `/api` (`/api/pages`, `/api/search`, `/api/page/<slug>`, `/api/graph`, and the graph queries) for any other client.
 
 ### Multiple wikis
 

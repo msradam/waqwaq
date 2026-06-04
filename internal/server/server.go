@@ -302,6 +302,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/custom.css", s.handleCustomCSS)
 	mux.HandleFunc("/proposals/", s.handleProposal)
 	mux.HandleFunc("/proposals", s.handleProposals)
+	s.registerAPI(mux)
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/oracle", s.handleOracle)
 	mux.HandleFunc("/graph.json", s.handleGraphJSON)

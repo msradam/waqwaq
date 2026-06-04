@@ -42,6 +42,13 @@ type pageRef struct {
 	Title string `json:"title"`
 }
 
+// ServeStdio runs an MCP server over stdin/stdout, the transport agents use to
+// launch a local MCP server as a subprocess. It blocks until the client closes
+// the connection. Nothing may be written to stdout except the protocol.
+func ServeStdio(ctx context.Context, srv *mcp.Server) error {
+	return srv.Run(ctx, &mcp.StdioTransport{})
+}
+
 func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mcp.Server {
 	instructions := baseInstructions
 	if schema := st.Instructions(); schema != "" {

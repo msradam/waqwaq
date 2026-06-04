@@ -4,9 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"html/template"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -14,13 +17,17 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/charmbracelet/glamour"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/msradam/waqwaq/internal/auth"
 	"github.com/msradam/waqwaq/internal/config"
+	"github.com/msradam/waqwaq/internal/kb"
+	"github.com/msradam/waqwaq/internal/kbclient"
 	"github.com/msradam/waqwaq/internal/mcpserver"
 	"github.com/msradam/waqwaq/internal/render"
 	"github.com/msradam/waqwaq/internal/review"
@@ -46,6 +53,14 @@ func main() {
 		cmdIngest(os.Args[2:])
 	case "export":
 		cmdExport(os.Args[2:])
+	case "mcp":
+		cmdMCP(os.Args[2:])
+	case "toc":
+		cmdTOC(os.Args[2:])
+	case "grep":
+		cmdGrep(os.Args[2:])
+	case "cat":
+		cmdCat(os.Args[2:])
 	case "passwd":
 		cmdPasswd(os.Args[2:])
 	case "version", "-v", "--version":
@@ -65,8 +80,15 @@ usage:
                                       serve web UI + MCP over one port
   waqwaq ingest <dir> <file>...       add raw documents to the wiki's raw/ area
   waqwaq export <dir> <outdir>        render the wiki to a static HTML site
+  waqwaq mcp    [dir]                 serve MCP over stdio (for an agent subprocess)
+  waqwaq toc    [dir]                 list pages as slug<tab>title (greppable)
+  waqwaq grep   <query> [dir]         full-text search; --tag, --links-to scope it
+  waqwaq cat    <slug> [dir]          print a page; --render for terminal markdown
   waqwaq passwd [password]            print a bcrypt hash for a web.users entry
   waqwaq version
+
+The query verbs (toc, grep, cat) run against a local folder, or add
+--remote URL (or set WAQWAQ_REMOTE) to query a running waqwaq server's /api.
 
 Pages are served from <dir>/wiki if present, otherwise from <dir> itself, so a
 bare markdown folder or an Obsidian vault works without restructuring.
@@ -421,6 +443,221 @@ func cmdPasswd(args []string) {
 		log.Fatalf("passwd: %v", err)
 	}
 	fmt.Println(string(hash))
+}
+
+func cmdMCP(args []string) {
+	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
+	readOnly := fs.Bool("read-only", envBool("WAQWAQ_READ_ONLY"), "disable writes")
+	forceReview := fs.Bool("review", envBool("WAQWAQ_REVIEW"), "queue all writes for review")
+	rest := parseArgs(fs, args)
+	dir := "."
+	if len(rest) > 0 {
+		dir = rest[0]
+	}
+	st, err := store.New(dir)
+	if err != nil {
+		log.Fatalf("mcp: %v", err)
+	}
+	cfg, _ := config.Load(filepath.Join(st.Root(), ".waqwaq", "config.json"))
+	reg, err := auth.Load(filepath.Join(st.Root(), ".waqwaq", "tokens.json"))
+	if err != nil {
+		log.Fatalf("mcp: %v", err)
+	}
+	q, err := review.New(st, cfg.Webhook)
+	if err != nil {
+		log.Fatalf("mcp: %v", err)
+	}
+	var searcher search.Searcher = st
+	if idx, err := search.New(st); err == nil {
+		searcher = idx
+		defer func() { _ = idx.Close() }()
+	}
+	srv := mcpserver.New(st, q, reg, mcpserver.Options{
+		ReadOnly: *readOnly, ForceReview: *forceReview || cfg.Review, Rules: cfg.Lint, Search: searcher,
+	})
+	if err := mcpserver.ServeStdio(context.Background(), srv); err != nil && !errors.Is(err, io.EOF) {
+		log.Fatalf("mcp: %v", err)
+	}
+}
+
+// kbFor returns the knowledge base a query verb runs against: a remote server's
+// /api when remote is set (or WAQWAQ_REMOTE), otherwise the local folder.
+func kbFor(remote, token, dir string) (kb.KnowledgeBase, error) {
+	if remote != "" {
+		return kbclient.New(remote, token), nil
+	}
+	if dir == "" {
+		dir = "."
+	}
+	return store.New(dir)
+}
+
+func argAt(rest []string, i int) string {
+	if i < len(rest) {
+		return rest[i]
+	}
+	return ""
+}
+
+func refsJSON(metas []store.PageMeta) any {
+	type ref struct {
+		Slug  string `json:"slug"`
+		Title string `json:"title"`
+	}
+	out := make([]ref, len(metas))
+	for i, m := range metas {
+		out[i] = ref{Slug: m.Slug, Title: m.Title}
+	}
+	return out
+}
+
+func printJSON(v any) {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		log.Fatalf("json: %v", err)
+	}
+	fmt.Println(string(b))
+}
+
+func remoteFlags(fs *flag.FlagSet) (*string, *string) {
+	return fs.String("remote", os.Getenv("WAQWAQ_REMOTE"), "query a remote waqwaq server URL instead of a local dir"),
+		fs.String("token", os.Getenv("WAQWAQ_TOKEN"), "bearer token for --remote")
+}
+
+func cmdTOC(args []string) {
+	fs := flag.NewFlagSet("toc", flag.ExitOnError)
+	remote, token := remoteFlags(fs)
+	asJSON := fs.Bool("json", false, "emit JSON")
+	rest := parseArgs(fs, args)
+	base, err := kbFor(*remote, *token, argAt(rest, 0))
+	if err != nil {
+		log.Fatalf("toc: %v", err)
+	}
+	metas, err := base.List()
+	if err != nil {
+		log.Fatalf("toc: %v", err)
+	}
+	if *asJSON {
+		printJSON(refsJSON(metas))
+		return
+	}
+	for _, m := range metas {
+		fmt.Printf("%s\t%s\n", m.Slug, m.Title)
+	}
+}
+
+func cmdGrep(args []string) {
+	fs := flag.NewFlagSet("grep", flag.ExitOnError)
+	remote, token := remoteFlags(fs)
+	asJSON := fs.Bool("json", false, "emit JSON")
+	tag := fs.String("tag", "", "only pages carrying this frontmatter tag")
+	linksTo := fs.String("links-to", "", "only pages that link to this slug")
+	rest := parseArgs(fs, args)
+	if len(rest) == 0 {
+		log.Fatal("usage: waqwaq grep [flags] <query> [dir]")
+	}
+	base, err := kbFor(*remote, *token, argAt(rest, 1))
+	if err != nil {
+		log.Fatalf("grep: %v", err)
+	}
+	hits, err := base.Search(rest[0])
+	if err != nil {
+		log.Fatalf("grep: %v", err)
+	}
+	if scope := scopeSet(base, *tag, *linksTo); scope != nil {
+		kept := hits[:0]
+		for _, h := range hits {
+			if scope[h.Slug] {
+				kept = append(kept, h)
+			}
+		}
+		hits = kept
+	}
+	if *asJSON {
+		printJSON(hits)
+		return
+	}
+	for _, h := range hits {
+		fmt.Printf("%s\t%s\n", h.Slug, strings.TrimSpace(h.Snippet))
+	}
+}
+
+// scopeSet is the set of slugs allowed by --tag and --links-to (their
+// intersection), or nil when neither is set. This is graph-aware scoping that
+// plain grep cannot express: "search only pages that link to X".
+func scopeSet(base kb.KnowledgeBase, tag, linksTo string) map[string]bool {
+	if tag == "" && linksTo == "" {
+		return nil
+	}
+	set := map[string]bool{}
+	first := true
+	narrow := func(slugs []string) {
+		next := map[string]bool{}
+		for _, s := range slugs {
+			if first || set[s] {
+				next[s] = true
+			}
+		}
+		set, first = next, false
+	}
+	if tag != "" {
+		tags, err := base.Tags()
+		if err != nil {
+			log.Fatalf("grep: %v", err)
+		}
+		narrow(slugsOf(tags[tag]))
+	}
+	if linksTo != "" {
+		in, err := base.Backlinks(linksTo)
+		if err != nil {
+			log.Fatalf("grep: %v", err)
+		}
+		narrow(slugsOf(in))
+	}
+	return set
+}
+
+func slugsOf(metas []store.PageMeta) []string {
+	out := make([]string, len(metas))
+	for i, m := range metas {
+		out[i] = m.Slug
+	}
+	return out
+}
+
+func cmdCat(args []string) {
+	fs := flag.NewFlagSet("cat", flag.ExitOnError)
+	remote, token := remoteFlags(fs)
+	doRender := fs.Bool("render", false, "render the markdown for the terminal")
+	rest := parseArgs(fs, args)
+	if len(rest) == 0 {
+		log.Fatal("usage: waqwaq cat [flags] <slug> [dir]")
+	}
+	base, err := kbFor(*remote, *token, argAt(rest, 1))
+	if err != nil {
+		log.Fatalf("cat: %v", err)
+	}
+	slug := rest[0]
+	page, err := base.Read(slug)
+	if err != nil {
+		if canon, ok := base.ResolveLink(slug); ok {
+			page, err = base.Read(canon)
+		}
+	}
+	if err != nil {
+		log.Fatalf("cat: %v", err)
+	}
+	if *doRender {
+		if out, rerr := glamour.Render(page.Body, "auto"); rerr == nil {
+			fmt.Print(out)
+			return
+		}
+	}
+	if page.Raw != "" {
+		fmt.Print(page.Raw)
+	} else {
+		fmt.Print(page.Body)
+	}
 }
 
 const staticPageHTML = `<!doctype html>
