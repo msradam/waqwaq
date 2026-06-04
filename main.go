@@ -231,6 +231,7 @@ func buildWiki(dir, base string, readOnly, forceReview bool, tokensPath string, 
 	if err != nil {
 		return nil, cleanup, config.Config{}, nil, err
 	}
+	go st.Warm()
 	tp := tokensPath
 	if tp == "" {
 		tp = filepath.Join(st.Root(), ".waqwaq", "tokens.json")

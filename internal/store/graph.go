@@ -365,6 +365,18 @@ func (s *Store) adjacency() ([]PageMeta, map[string]string, map[string][]string,
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	s.graphMu.Lock()
+	sig := s.graphSig
+	s.graphMu.Unlock()
+
+	s.adjMu.Lock()
+	if sig == s.adjSig && s.adjMap != nil {
+		m, t, a := s.adjMetas, s.adjTitle, s.adjMap
+		s.adjMu.Unlock()
+		return m, t, a, nil
+	}
+	s.adjMu.Unlock()
+
 	title := make(map[string]string, len(metas))
 	for _, m := range metas {
 		title[m.Slug] = m.Title
@@ -383,6 +395,9 @@ func (s *Store) adjacency() ([]PageMeta, map[string]string, map[string][]string,
 		link(e.From, e.To)
 		link(e.To, e.From)
 	}
+	s.adjMu.Lock()
+	s.adjSig, s.adjMetas, s.adjTitle, s.adjMap = sig, metas, title, adj
+	s.adjMu.Unlock()
 	return metas, title, adj, nil
 }
 

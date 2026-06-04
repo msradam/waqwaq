@@ -1,7 +1,9 @@
 package store
 
 import (
+	"bufio"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -62,25 +64,132 @@ type Revision struct {
 	When    time.Time `json:"when"`
 }
 
-// Recent returns the n most recently changed pages, newest first.
+// Recent returns the n most recently changed pages, newest first. It reads the
+// recent commits with a single streaming `git log` and stops as soon as it has
+// n distinct pages, so its cost is independent of the total page count (the old
+// approach forked one `git log` per page).
 func (s *Store) Recent(n int) ([]Change, error) {
+	if n <= 0 {
+		n = 20
+	}
 	metas, err := s.List()
 	if err != nil {
 		return nil, err
 	}
-	var changes []Change
+	title := make(map[string]string, len(metas))
 	for _, m := range metas {
-		a, ok := s.LastTouched(m.Slug)
-		if !ok {
+		title[m.Slug] = m.Title
+	}
+	if !s.git {
+		return s.recentByModTime(metas, title, n), nil
+	}
+
+	pagesRel := filepath.ToSlash(s.relPages())
+	cmd := exec.Command("git", "log", "-n", "2000", "--name-only", "--format=%x01%an%x1f%aI")
+	cmd.Dir = s.gitRoot
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}()
+
+	sc := bufio.NewScanner(stdout)
+	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	var changes []Change
+	seen := make(map[string]bool)
+	var author string
+	var when time.Time
+	for sc.Scan() {
+		line := sc.Text()
+		if len(line) > 0 && line[0] == '\x01' {
+			parts := strings.SplitN(line[1:], "\x1f", 2)
+			author = parts[0]
+			if len(parts) > 1 {
+				when, _ = time.Parse(time.RFC3339, parts[1])
+			}
 			continue
 		}
-		changes = append(changes, Change{Slug: m.Slug, Title: m.Title, Author: a.Author, When: a.When})
+		if line == "" {
+			continue
+		}
+		slug, ok := slugForGitPath(line, pagesRel)
+		if !ok || seen[slug] {
+			continue
+		}
+		t, known := title[slug]
+		if !known {
+			continue
+		}
+		seen[slug] = true
+		changes = append(changes, Change{Slug: slug, Title: t, Author: author, When: when})
+		if len(changes) >= n {
+			break
+		}
 	}
-	sort.Slice(changes, func(i, j int) bool { return changes[i].When.After(changes[j].When) })
-	if len(changes) > n {
-		changes = changes[:n]
-	}
+	sort.SliceStable(changes, func(i, j int) bool { return changes[i].When.After(changes[j].When) })
 	return changes, nil
+}
+
+// relPages is the page directory relative to the git root ("." when they are the
+// same directory), matching the paths `git log` prints.
+func (s *Store) relPages() string {
+	rel, err := filepath.Rel(s.gitRoot, s.pages)
+	if err != nil {
+		return "."
+	}
+	return rel
+}
+
+// slugForGitPath turns a git-reported path into a page slug, or reports false if
+// it is not a markdown page under the page directory.
+func slugForGitPath(f, pagesRel string) (string, bool) {
+	if !strings.HasSuffix(f, ".md") {
+		return "", false
+	}
+	f = strings.TrimSuffix(f, ".md")
+	if pagesRel == "." || pagesRel == "" {
+		return f, true
+	}
+	pre := pagesRel + "/"
+	if !strings.HasPrefix(f, pre) {
+		return "", false
+	}
+	return strings.TrimPrefix(f, pre), true
+}
+
+// recentByModTime is the fallback ordering when the store is not a git repo.
+func (s *Store) recentByModTime(metas []PageMeta, title map[string]string, n int) []Change {
+	type entry struct {
+		slug, title string
+		when        time.Time
+	}
+	all := make([]entry, 0, len(metas))
+	for _, m := range metas {
+		p, err := s.pathFor(m.Slug)
+		if err != nil {
+			continue
+		}
+		fi, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		all = append(all, entry{m.Slug, title[m.Slug], fi.ModTime()})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].when.After(all[j].when) })
+	if len(all) > n {
+		all = all[:n]
+	}
+	out := make([]Change, len(all))
+	for i, e := range all {
+		out[i] = Change{Slug: e.slug, Title: e.title, When: e.when}
+	}
+	return out
 }
 
 // History returns the git revisions of a single page, newest first.
@@ -114,12 +223,25 @@ func (s *Store) History(slug string) ([]Revision, error) {
 	return revs, nil
 }
 
-// Tags maps every tag to the pages that carry it in their frontmatter.
+// Tags maps every tag to the pages that carry it in their frontmatter, cached
+// by Signature so the per-page frontmatter reads happen once per change.
 func (s *Store) Tags() (map[string][]PageMeta, error) {
 	metas, err := s.List()
 	if err != nil {
 		return nil, err
 	}
+	sig, err := s.Signature()
+	if err != nil {
+		return nil, err
+	}
+	s.tagsMu.Lock()
+	if sig == s.tagsSig && s.tagsCache != nil {
+		t := s.tagsCache
+		s.tagsMu.Unlock()
+		return t, nil
+	}
+	s.tagsMu.Unlock()
+
 	tags := map[string][]PageMeta{}
 	for _, m := range metas {
 		page, err := s.Read(m.Slug)
@@ -130,6 +252,9 @@ func (s *Store) Tags() (map[string][]PageMeta, error) {
 			tags[t] = append(tags[t], m)
 		}
 	}
+	s.tagsMu.Lock()
+	s.tagsSig, s.tagsCache = sig, tags
+	s.tagsMu.Unlock()
 	return tags, nil
 }
 

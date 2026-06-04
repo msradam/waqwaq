@@ -39,11 +39,29 @@ type Store struct {
 	git     bool
 	mu      sync.Mutex // serializes writes so concurrent commits cannot race on git
 
+	sigMu  sync.Mutex // memoizes the corpus signature so cache checks need not re-stat the tree
+	sigVal string
+	sigAt  time.Time
+
+	listMu    sync.Mutex // guards the page-list cache below
+	listSig   string
+	listMetas []PageMeta
+
 	graphMu     sync.Mutex // guards the link-graph cache below
 	graphSig    string
 	graphMetas  []PageMeta
 	graphEdges  []GraphEdge
 	graphBroken []BrokenLink
+
+	adjMu    sync.Mutex // guards the undirected-adjacency cache below
+	adjSig   string
+	adjMetas []PageMeta
+	adjTitle map[string]string
+	adjMap   map[string][]string
+
+	tagsMu    sync.Mutex // guards the tag-index cache below
+	tagsSig   string
+	tagsCache map[string][]PageMeta
 
 	assetMu  sync.Mutex // guards the asset-by-basename index below
 	assetSig string
@@ -164,7 +182,42 @@ func (s *Store) pathFor(slug string) (string, error) {
 	return p, nil
 }
 
+// Warm builds the corpus-wide caches (page list, link graph, adjacency, tags)
+// ahead of the first request. Serve runs it in the background so an agent's
+// first graph or tag query on a large wiki hits a warm cache instead of paying
+// the full-corpus read. Errors are ignored: the caches rebuild lazily anyway.
+func (s *Store) Warm() {
+	_, _ = s.List()
+	_, _, _, _ = s.adjacency()
+	_, _ = s.Tags()
+}
+
+// List returns every page's slug and title, cached by Signature so the
+// per-page title reads happen once per change rather than on every call.
 func (s *Store) List() ([]PageMeta, error) {
+	sig, err := s.Signature()
+	if err != nil {
+		return nil, err
+	}
+	s.listMu.Lock()
+	if sig == s.listSig && s.listMetas != nil {
+		metas := s.listMetas
+		s.listMu.Unlock()
+		return metas, nil
+	}
+	s.listMu.Unlock()
+
+	metas, err := s.listUncached()
+	if err != nil {
+		return nil, err
+	}
+	s.listMu.Lock()
+	s.listSig, s.listMetas = sig, metas
+	s.listMu.Unlock()
+	return metas, nil
+}
+
+func (s *Store) listUncached() ([]PageMeta, error) {
 	var metas []PageMeta
 	err := filepath.WalkDir(s.pages, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -191,10 +244,35 @@ func (s *Store) List() ([]PageMeta, error) {
 	return metas, nil
 }
 
+// sigTTL bounds how long a computed Signature is reused before re-stating the
+// tree. Internal writes invalidate it immediately; this only delays noticing
+// edits made by another process, which a read-mostly wiki tolerates.
+const sigTTL = time.Second
+
 // Signature is a hash of every page's path, mtime, and size, so a cache can
 // detect staleness (including edits by external tools) from stats alone, no
-// file reads.
+// file reads. The result is memoized for sigTTL so the many cache checks that
+// call it do not each re-walk a large tree.
 func (s *Store) Signature() (string, error) {
+	s.sigMu.Lock()
+	if s.sigVal != "" && time.Since(s.sigAt) < sigTTL {
+		v := s.sigVal
+		s.sigMu.Unlock()
+		return v, nil
+	}
+	s.sigMu.Unlock()
+
+	sig, err := s.computeSignature()
+	if err != nil {
+		return "", err
+	}
+	s.sigMu.Lock()
+	s.sigVal, s.sigAt = sig, time.Now()
+	s.sigMu.Unlock()
+	return sig, nil
+}
+
+func (s *Store) computeSignature() (string, error) {
 	h := sha256.New()
 	err := filepath.WalkDir(s.pages, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -269,7 +347,19 @@ func (s *Store) Write(slug, content, author, message string) error {
 	if _, err := os.Stat(filepath.Join(s.gitRoot, ".gitignore")); err == nil {
 		paths = append(paths, ".gitignore")
 	}
-	return s.commit(message, author, paths...)
+	if err := s.commit(message, author, paths...); err != nil {
+		return err
+	}
+	s.invalidateSignature()
+	return nil
+}
+
+// invalidateSignature forces the next Signature call to re-stat the tree, so a
+// just-written page is reflected without waiting for the memo to expire.
+func (s *Store) invalidateSignature() {
+	s.sigMu.Lock()
+	s.sigVal, s.sigAt = "", time.Time{}
+	s.sigMu.Unlock()
 }
 
 func (s *Store) Search(query string) ([]SearchHit, error) {
