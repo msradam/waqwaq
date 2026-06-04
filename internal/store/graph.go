@@ -44,15 +44,42 @@ func (s *Store) graphData() ([]PageMeta, []GraphEdge, []BrokenLink, error) {
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	fps, err := s.Fingerprints()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	// Re-read only the pages whose fingerprint changed; reuse the cached link
+	// extraction for the rest. Resolution below always runs against the current
+	// page set, so adds and deletes stay correct without re-reading everything.
+	if s.graphParse == nil {
+		s.graphParse = make(map[string]*parsedPage, len(fps))
+	}
+	for slug, fp := range fps {
+		if p, ok := s.graphParse[slug]; ok && p.fp == fp {
+			continue
+		}
+		page, err := s.Read(slug)
+		if err != nil {
+			delete(s.graphParse, slug)
+			continue
+		}
+		body := stripCode(page.Body)
+		s.graphParse[slug] = &parsedPage{fp: fp, wiki: wikiLinks(body), md: markdownLinkTargets(body)}
+	}
+	for slug := range s.graphParse {
+		if _, ok := fps[slug]; !ok {
+			delete(s.graphParse, slug)
+		}
+	}
+
 	resolver := newLinkResolver(metas)
 	var edges []GraphEdge
 	var broken []BrokenLink
 	for _, m := range metas {
-		page, err := s.Read(m.Slug)
-		if err != nil {
+		pp := s.graphParse[m.Slug]
+		if pp == nil {
 			continue
 		}
-		body := stripCode(page.Body)
 		seenTo := map[string]bool{}
 		addEdge := func(canon string) {
 			if canon != "" && canon != m.Slug && !seenTo[canon] {
@@ -60,7 +87,7 @@ func (s *Store) graphData() ([]PageMeta, []GraphEdge, []BrokenLink, error) {
 				edges = append(edges, GraphEdge{From: m.Slug, To: canon})
 			}
 		}
-		for _, lk := range wikiLinks(body) {
+		for _, lk := range pp.wiki {
 			if lk.embed {
 				continue // image/note transclusions are content, not page edges
 			}
@@ -76,12 +103,20 @@ func (s *Store) graphData() ([]PageMeta, []GraphEdge, []BrokenLink, error) {
 		}
 		// Plain markdown links to internal pages also count as edges, but a missing
 		// one is not flagged broken: markdown links to external files are benign.
-		for _, t := range markdownLinkTargets(body) {
+		for _, t := range pp.md {
 			addEdge(resolver.resolve(t))
 		}
 	}
 	s.graphSig, s.graphMetas, s.graphEdges, s.graphBroken = sig, metas, edges, broken
 	return metas, edges, broken, nil
+}
+
+// parsedPage is one page's link extraction, cached by fingerprint so an
+// unchanged page is not re-read on a graph rebuild.
+type parsedPage struct {
+	fp   string
+	wiki []wlink
+	md   []string
 }
 
 // Backlinks returns the pages that link to the given slug.

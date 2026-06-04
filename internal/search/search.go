@@ -13,13 +13,15 @@ import (
 	"github.com/msradam/waqwaq/internal/store"
 )
 
-// Index is the SQLite FTS5 full-text index, rebuilt only when the store's mtime
-// signature changes.
+// Index is the SQLite FTS5 full-text index. It refreshes only when the store's
+// mtime signature changes, and then updates only the pages that changed rather
+// than rebuilding the whole table.
 type Index struct {
 	st  *store.Store
 	db  *sql.DB
 	mu  sync.Mutex
 	sig string
+	fps map[string]string // slug -> fingerprint of the indexed content
 }
 
 func New(st *store.Store) (*Index, error) {
@@ -84,7 +86,7 @@ func (ix *Index) refresh() error {
 	if sig == ix.sig {
 		return nil
 	}
-	metas, err := ix.st.List()
+	fps, err := ix.st.Fingerprints()
 	if err != nil {
 		return err
 	}
@@ -93,27 +95,43 @@ func (ix *Index) refresh() error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.Exec(`DELETE FROM pages`); err != nil {
-		return err
-	}
-	stmt, err := tx.Prepare(`INSERT INTO pages(slug, title, body) VALUES(?, ?, ?)`)
+	del, err := tx.Prepare(`DELETE FROM pages WHERE slug = ?`)
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
-	for _, m := range metas {
-		page, err := ix.st.Read(m.Slug)
+	defer del.Close()
+	ins, err := tx.Prepare(`INSERT INTO pages(slug, title, body) VALUES(?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer ins.Close()
+	for slug, fp := range fps {
+		if ix.fps[slug] == fp {
+			continue
+		}
+		page, err := ix.st.Read(slug)
 		if err != nil {
 			continue
 		}
-		if _, err := stmt.Exec(m.Slug, m.Title, page.Body); err != nil {
+		if _, err := del.Exec(slug); err != nil {
 			return err
+		}
+		if _, err := ins.Exec(slug, page.Title, page.Body); err != nil {
+			return err
+		}
+	}
+	for slug := range ix.fps {
+		if _, ok := fps[slug]; !ok {
+			if _, err := del.Exec(slug); err != nil {
+				return err
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
 	ix.sig = sig
+	ix.fps = fps
 	return nil
 }
 

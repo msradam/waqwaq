@@ -52,6 +52,7 @@ type Store struct {
 	graphMetas  []PageMeta
 	graphEdges  []GraphEdge
 	graphBroken []BrokenLink
+	graphParse  map[string]*parsedPage // per-page extracted links, reused across rebuilds when a page's fingerprint is unchanged
 
 	adjMu    sync.Mutex // guards the undirected-adjacency cache below
 	adjSig   string
@@ -270,6 +271,39 @@ func (s *Store) Signature() (string, error) {
 	s.sigVal, s.sigAt = sig, time.Now()
 	s.sigMu.Unlock()
 	return sig, nil
+}
+
+// Fingerprints maps each page's slug to a cheap content fingerprint (mtime and
+// size) computed from stats alone. Incremental indexers diff it against their
+// last view to re-read only the pages that changed.
+func (s *Store) Fingerprints() (map[string]string, error) {
+	fps := make(map[string]string)
+	err := filepath.WalkDir(s.pages, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if path != s.pages && (d.Name() == ".git" || path == s.raw) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(d.Name(), ".md") {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(s.pages, path)
+		slug := strings.TrimSuffix(filepath.ToSlash(rel), ".md")
+		fps[slug] = fmt.Sprintf("%d|%d", info.ModTime().UnixNano(), info.Size())
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return fps, nil
 }
 
 func (s *Store) computeSignature() (string, error) {
