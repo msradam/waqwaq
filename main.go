@@ -38,7 +38,7 @@ import (
 	"github.com/msradam/waqwaq/internal/tui"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 func main() {
 	log.SetFlags(0)
