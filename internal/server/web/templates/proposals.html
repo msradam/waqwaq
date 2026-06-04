@@ -18,7 +18,7 @@
       {{range .Proposals}}
         <tr>
           <td><span class="status status-{{.Status}}">{{.Status}}</span></td>
-          <td><a href="{{$.Chrome.Base}}/proposals/{{.ID}}">{{.Title}}</a> <span class="muted">{{.Slug}}</span></td>
+          <td>{{if .IsDelete}}<span class="op-delete">delete</span> {{end}}<a href="{{$.Chrome.Base}}/proposals/{{.ID}}">{{.Title}}</a> <span class="muted">{{.Slug}}</span></td>
           <td>{{.Author}}</td>
           <td class="muted">{{.Created.Format "2006-01-02 15:04"}}</td>
         </tr>

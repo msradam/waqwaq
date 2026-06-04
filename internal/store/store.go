@@ -429,6 +429,39 @@ func (s *Store) invalidateSignature() {
 	s.sigMu.Unlock()
 }
 
+// Delete removes a page and commits the removal. The page stays recoverable from
+// git history. It returns os.ErrNotExist when the slug has no page.
+func (s *Store) Delete(slug, author, message string) error {
+	p, err := s.pathFor(slug)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := os.Stat(p); err != nil {
+		return err
+	}
+	if err := os.Remove(p); err != nil {
+		return err
+	}
+	// Remove now-empty parent directories up to the pages root, so deleting the
+	// last page in a folder does not leave an empty directory behind.
+	for dir := filepath.Dir(p); dir != s.pages && strings.HasPrefix(dir, s.pages+sep); dir = filepath.Dir(dir) {
+		if os.Remove(dir) != nil {
+			break // not empty
+		}
+	}
+	rel, err := filepath.Rel(s.gitRoot, p)
+	if err != nil {
+		return err
+	}
+	if err := s.commit(message, author, rel); err != nil {
+		return err
+	}
+	s.invalidateSignature()
+	return nil
+}
+
 func (s *Store) Search(query string) ([]SearchHit, error) {
 	metas, err := s.List()
 	if err != nil {

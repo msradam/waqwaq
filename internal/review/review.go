@@ -34,10 +34,20 @@ const (
 	Rejected Status = "rejected"
 )
 
+// Op is the kind of change a proposal applies. An empty value means a write, so
+// proposals saved before deletes existed still load as writes.
+type Op string
+
+const (
+	OpWrite  Op = "write"
+	OpDelete Op = "delete"
+)
+
 type Proposal struct {
 	ID         string       `json:"id"`
 	Slug       string       `json:"slug"`
 	Title      string       `json:"title"`
+	Op         Op           `json:"op,omitempty"`
 	Content    string       `json:"content"`
 	Author     string       `json:"author"`
 	Created    time.Time    `json:"created"`
@@ -72,13 +82,17 @@ func (q *Queue) notify(p *Proposal) {
 	if q.webhook == "" {
 		return
 	}
+	verb := "proposed a change to"
+	if p.IsDelete() {
+		verb = "proposed deleting"
+	}
 	payload, err := json.Marshal(map[string]any{
 		"event":  "proposal.created",
 		"id":     p.ID,
 		"slug":   p.Slug,
 		"title":  p.Title,
 		"author": p.Author,
-		"text":   fmt.Sprintf("Waqwaq: %s proposed a change to %q (%s). Review it at /proposals/%s", p.Author, p.Title, p.Slug, p.ID),
+		"text":   fmt.Sprintf("Waqwaq: %s %s %q (%s). Review it at /proposals/%s", p.Author, verb, p.Title, p.Slug, p.ID),
 	})
 	if err != nil {
 		return
@@ -123,6 +137,7 @@ func (q *Queue) Create(slug, content, author string, issues []lint.Issue) (*Prop
 		ID:         newID(),
 		Slug:       slug,
 		Title:      title,
+		Op:         OpWrite,
 		Content:    content,
 		Author:     author,
 		Created:    time.Now().UTC(),
@@ -137,6 +152,40 @@ func (q *Queue) Create(slug, content, author string, issues []lint.Issue) (*Prop
 	q.notify(p)
 	return p, nil
 }
+
+// CreateDelete records a pending proposal to remove an existing page.
+func (q *Queue) CreateDelete(slug, author string) (*Proposal, error) {
+	base, err := q.st.Read(slug)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("page %q does not exist", slug)
+		}
+		return nil, err
+	}
+	title := base.Title
+	if strings.TrimSpace(title) == "" {
+		title = slug
+	}
+	p := &Proposal{
+		ID:         newID(),
+		Slug:       slug,
+		Title:      title,
+		Op:         OpDelete,
+		Author:     author,
+		Created:    time.Now().UTC(),
+		BaseHash:   hashContent(base.Raw),
+		BaseExists: true,
+		Status:     Pending,
+	}
+	if err := q.save(p); err != nil {
+		return nil, err
+	}
+	q.notify(p)
+	return p, nil
+}
+
+// IsDelete reports whether the proposal removes the page rather than writing it.
+func (p *Proposal) IsDelete() bool { return p.Op == OpDelete }
 
 func (q *Queue) List() ([]*Proposal, error) {
 	entries, err := os.ReadDir(q.dir)
@@ -201,6 +250,13 @@ func (q *Queue) Merge(id, reviewer string) (*Proposal, error) {
 		return nil, fmt.Errorf("proposal %s is already %s", id, p.Status)
 	}
 	author := fmt.Sprintf("%s <proposed@waqwaq.local>", p.Author)
+	if p.IsDelete() {
+		message := fmt.Sprintf("waqwaq: delete %s via proposal %s, approved by %s", p.Slug, p.ID, reviewer)
+		if err := q.st.Delete(p.Slug, author, message); err != nil {
+			return nil, err
+		}
+		return q.close(p, Merged, reviewer, "")
+	}
 	message := fmt.Sprintf("waqwaq: merge proposal %s (%s), approved by %s", p.ID, p.Slug, reviewer)
 	if err := q.st.Write(p.Slug, p.Content, author, message); err != nil {
 		return nil, err

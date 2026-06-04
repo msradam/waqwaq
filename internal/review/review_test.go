@@ -2,13 +2,41 @@ package review
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/msradam/waqwaq/internal/store"
 )
+
+func TestDeleteProposalMerge(t *testing.T) {
+	q, st := newQueue(t)
+	if err := st.Write("doomed", "---\ntitle: Doomed\n---\nbye\n", "", "add"); err != nil {
+		t.Fatal(err)
+	}
+	p, err := q.CreateDelete("doomed", "agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.IsDelete() {
+		t.Fatalf("proposal Op = %q, want delete", p.Op)
+	}
+	if _, err := st.Read("doomed"); err != nil {
+		t.Fatalf("page should still exist before merge: %v", err)
+	}
+	if _, err := q.Merge(p.ID, "boss"); err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	if _, err := st.Read("doomed"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("after merging the delete proposal, page still readable: %v", err)
+	}
+	if _, err := q.CreateDelete("nope", "agent"); err == nil {
+		t.Error("CreateDelete on a missing page should error")
+	}
+}
 
 func newQueue(t *testing.T) (*Queue, *store.Store) {
 	t.Helper()

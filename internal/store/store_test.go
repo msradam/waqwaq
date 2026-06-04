@@ -1,11 +1,37 @@
 package store
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestDelete(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Write("folder/page", "---\ntitle: P\n---\nbody\n", "", "add"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete("folder/page", "", "del"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := s.Read("folder/page"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("after Delete, Read err = %v, want ErrNotExist", err)
+	}
+	if _, err := os.Stat(filepath.Join(s.Pages(), "folder")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("empty parent folder was not pruned")
+	}
+	if err := s.Delete("folder/page", "", "del"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Delete of a missing page = %v, want ErrNotExist", err)
+	}
+	if err := s.Delete("../escape", "", "del"); err == nil {
+		t.Error("Delete of a path-traversal slug should be refused")
+	}
+}
 
 func TestFrontmatterBodyWithThematicBreak(t *testing.T) {
 	fm, body := SplitFrontmatter("---\ntitle: T\n---\n\nintro\n\n---\n\nmore\n")

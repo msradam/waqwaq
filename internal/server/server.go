@@ -312,6 +312,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/history/", s.handleHistory)
 	mux.HandleFunc("/diff/", s.handleDiff)
 	mux.HandleFunc("/edit/", s.handleEdit)
+	mux.HandleFunc("/delete/", s.handleDelete)
 	mux.HandleFunc("/upload", s.handleUpload)
 	mux.HandleFunc("/assets/", s.handleAsset)
 	mux.HandleFunc("/login", s.handleLogin)
@@ -525,6 +526,30 @@ func markNav(nodes []*navNode, active string) {
 		n.Open = active == n.Path || strings.HasPrefix(active, n.Path+"/")
 		markNav(n.Children, active)
 	}
+}
+
+// handleDelete removes a page. Like editing, an operator with edit rights
+// commits directly; the removal stays recoverable from git history.
+func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.readOnly || s.role(r) < RoleEditor {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	slug := strings.TrimPrefix(r.URL.Path, "/delete/")
+	if slug == "" {
+		http.NotFound(w, r)
+		return
+	}
+	author := fmt.Sprintf("%s <operator@waqwaq.local>", operatorName)
+	if err := s.store.Delete(slug, author, "waqwaq: delete "+slug); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, s.base+"/", http.StatusSeeOther)
 }
 
 // handleUpload stores a multipart file as a content-addressed asset and returns

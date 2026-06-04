@@ -135,6 +135,10 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .nav-folder > summary a.active { color: var(--accent); }
 .nav-children { margin-left: 10px; border-left: 1px solid var(--border); padding-left: 4px; }
 .nav-more { display: block; color: var(--muted); font-size: 12px; padding: 4px 8px; }
+.inline-delete { display: inline; }
+.linkbtn { background: none; border: none; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
+.linkbtn:hover { text-decoration: underline; }
+.op-delete { font-size: 11px; font-weight: 600; color: #b3261e; border: 1px solid currentColor; border-radius: 4px; padding: 0 5px; }
 
 .badge {
   display: inline-block;

@@ -6,7 +6,9 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"sort"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -24,7 +26,7 @@ Read with wiki_list, wiki_read, wiki_search, and wiki_graph (the page link graph
 Navigate by relationship: wiki_hubs lists the most-connected pages to read first, wiki_neighbors pulls a page's linked neighbourhood in one call, wiki_path returns the chain connecting two pages, and wiki_backlinks lists what links to a page.
 Maintain the wiki with wiki_health (orphans, broken links, stale pages), wiki_recent (recent changes), wiki_history, and wiki_tags. Use wiki_health to find what needs fixing.
 Raw documents to synthesise from live under raw/: list them with wiki_list_raw, read with wiki_read_raw, add with wiki_ingest.
-Create or replace pages with wiki_write. Each page needs YAML frontmatter with a title, and links other pages with [[slug]] or [[slug|label]] wikilinks.
+Create or replace pages with wiki_write. Each page needs YAML frontmatter with a title, and links other pages with [[slug]] or [[slug|label]] wikilinks. Remove a page with wiki_delete (recoverable from git history).
 wiki_lint dry-runs the checks. A missing title blocks a write; unresolved wikilinks are warnings.
 Depending on your access, a write either commits straight to git or is queued as a proposal for a human to approve. Check the status field returned by wiki_write, and list the queue with wiki_list_proposals.`
 
@@ -445,6 +447,43 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 			return nil, writeOut{}, err
 		}
 		return nil, writeOut{Status: "committed", Committed: true, Issues: issues}, nil
+	})
+
+	type deleteIn struct {
+		Slug    string `json:"slug" jsonschema:"slug of the page to remove"`
+		Message string `json:"message,omitempty" jsonschema:"commit message describing why"`
+	}
+	type deleteOut struct {
+		Status     string `json:"status"` // committed, proposed, or rejected
+		Deleted    bool   `json:"deleted,omitempty"`
+		ProposalID string `json:"proposal_id,omitempty"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "wiki_delete",
+		Description: "Remove a wiki page. A trusted caller deletes it directly (committed to git, recoverable from history); otherwise the deletion is queued as a proposal for a human to approve. Check the returned status.",
+	}, func(_ context.Context, req *mcp.CallToolRequest, in deleteIn) (*mcp.CallToolResult, deleteOut, error) {
+		principal := principalFrom(req, reg)
+		if _, err := st.Read(in.Slug); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return &mcp.CallToolResult{IsError: true}, deleteOut{Status: "rejected"}, fmt.Errorf("page %q does not exist", in.Slug)
+			}
+			return nil, deleteOut{}, err
+		}
+		if opts.ForceReview || !principal.Trusted {
+			p, err := q.CreateDelete(in.Slug, principal.Name)
+			if err != nil {
+				return nil, deleteOut{}, err
+			}
+			return nil, deleteOut{Status: "proposed", ProposalID: p.ID}, nil
+		}
+		message := in.Message
+		if message == "" {
+			message = fmt.Sprintf("waqwaq: delete %s", in.Slug)
+		}
+		if err := st.Delete(in.Slug, fmt.Sprintf("%s <agent@waqwaq.local>", principal.Name), message); err != nil {
+			return nil, deleteOut{}, err
+		}
+		return nil, deleteOut{Status: "committed", Deleted: true}, nil
 	})
 
 	type ingestIn struct {
