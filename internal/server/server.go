@@ -4,6 +4,7 @@ package server
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -317,7 +318,43 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/search", s.handleSearch)
 	mux.HandleFunc("/wiki/", s.handlePage)
 	mux.HandleFunc("/", s.handleIndex)
-	return s.webGuard(mux)
+	return gzipWrap(s.webGuard(mux))
+}
+
+// gzipWrap compresses text responses (HTML pages, JSON) since the nav and graph
+// payloads are large and highly repetitive. It skips /mcp (a streamed transport
+// that must not be buffered) and the static and asset file servers (they set a
+// Content-Length that gzip would invalidate, and their bytes are already small
+// or pre-compressed).
+func gzipWrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") ||
+			strings.HasPrefix(p, "/mcp") || strings.HasPrefix(p, "/static/") || strings.HasPrefix(p, "/assets/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Add("Vary", "Accept-Encoding")
+		w.Header().Del("Content-Length")
+		gz := gzip.NewWriter(w)
+		defer gz.Close()
+		next.ServeHTTP(&gzipResponseWriter{ResponseWriter: w, gz: gz}, r)
+	})
+}
+
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	gz *gzip.Writer
+}
+
+func (g *gzipResponseWriter) Write(b []byte) (int, error) { return g.gz.Write(b) }
+
+func (g *gzipResponseWriter) Flush() {
+	_ = g.gz.Flush()
+	if f, ok := g.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // canReview reports whether a request may approve or reject proposals. Local
@@ -669,7 +706,11 @@ func (s *Server) handleOracle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGraphJSON(w http.ResponseWriter, r *http.Request) {
-	g, err := s.store.GraphView()
+	limit := 400
+	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v >= 0 {
+		limit = v
+	}
+	g, err := s.store.GraphViewTop(limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

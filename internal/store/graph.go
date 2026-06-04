@@ -353,8 +353,71 @@ type GraphNode struct {
 }
 
 type GraphView struct {
-	Nodes []GraphNode `json:"nodes"`
-	Edges []GraphEdge `json:"edges"`
+	Nodes     []GraphNode `json:"nodes"`
+	Edges     []GraphEdge `json:"edges"`
+	Truncated bool        `json:"truncated,omitempty"`
+	Total     int         `json:"total,omitempty"` // total node count when truncated
+}
+
+// GraphViewTop returns a renderable subgraph for large wikis: it seeds with the
+// most-connected pages and pulls in each hub's neighbors, so the result stays
+// connected and keeps its edges, rather than a dust of high-degree nodes that
+// happen not to link to one another. A limit <= 0, or a graph already within the
+// limit, returns the full graph untouched.
+func (s *Store) GraphViewTop(limit int) (*GraphView, error) {
+	g, err := s.GraphView()
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 || len(g.Nodes) <= limit {
+		return g, nil
+	}
+	_, _, adj, err := s.adjacency()
+	if err != nil {
+		return nil, err
+	}
+	bySlug := make(map[string]GraphNode, len(g.Nodes))
+	for _, n := range g.Nodes {
+		bySlug[n.Slug] = n
+	}
+	hubs := make([]GraphNode, len(g.Nodes))
+	copy(hubs, g.Nodes)
+	sort.Slice(hubs, func(i, j int) bool {
+		if hubs[i].Degree != hubs[j].Degree {
+			return hubs[i].Degree > hubs[j].Degree
+		}
+		return hubs[i].Slug < hubs[j].Slug
+	})
+	keep := make(map[string]bool, limit)
+	order := make([]GraphNode, 0, limit)
+	add := func(slug string) {
+		if keep[slug] || len(keep) >= limit {
+			return
+		}
+		keep[slug] = true
+		order = append(order, bySlug[slug])
+	}
+	for _, h := range hubs {
+		if len(keep) >= limit {
+			break
+		}
+		add(h.Slug)
+		nbrs := append([]string(nil), adj[h.Slug]...)
+		sort.Slice(nbrs, func(i, j int) bool { return bySlug[nbrs[i]].Degree > bySlug[nbrs[j]].Degree })
+		for _, nb := range nbrs {
+			if len(keep) >= limit {
+				break
+			}
+			add(nb)
+		}
+	}
+	edges := make([]GraphEdge, 0, len(g.Edges))
+	for _, e := range g.Edges {
+		if keep[e.From] && keep[e.To] {
+			edges = append(edges, e)
+		}
+	}
+	return &GraphView{Nodes: order, Edges: edges, Truncated: true, Total: len(g.Nodes)}, nil
 }
 
 // adjacency returns the page list, a slug->title map, and an undirected

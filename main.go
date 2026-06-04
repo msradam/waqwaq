@@ -252,6 +252,7 @@ func buildWiki(dir, base string, readOnly, forceReview bool, tokensPath string, 
 	if idx, err := search.New(st); err == nil {
 		searcher = idx
 		cleanup = func() { _ = idx.Close() }
+		go idx.Warm()
 	}
 	queueAll := forceReview || cfg.Review
 	mcpSrv := mcpserver.New(st, q, reg, mcpserver.Options{ReadOnly: readOnly, ForceReview: queueAll, Rules: cfg.Lint, Search: searcher})

@@ -40,6 +40,14 @@ func New(st *store.Store) (*Index, error) {
 
 func (ix *Index) Close() error { return ix.db.Close() }
 
+// Warm builds the index ahead of the first query so the first search does not
+// pay the full-corpus indexing cost. Serve runs it in the background at startup.
+func (ix *Index) Warm() {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	_ = ix.refresh()
+}
+
 func (ix *Index) Search(query string) ([]store.SearchHit, error) {
 	match := buildMatch(query)
 	if match == "" {

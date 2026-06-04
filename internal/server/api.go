@@ -43,13 +43,30 @@ func refs(metas []store.PageMeta) []apiRef {
 	return out
 }
 
-func (s *Server) apiPages(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) apiPages(w http.ResponseWriter, r *http.Request) {
 	metas, err := s.store.List()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"pages": refs(metas)})
+	total := len(metas)
+	limit := 1000
+	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v >= 0 {
+		limit = v // 0 returns all pages from offset
+	}
+	offset := 0
+	if v, err := strconv.Atoi(r.URL.Query().Get("offset")); err == nil && v > 0 {
+		offset = v
+	}
+	if offset > total {
+		offset = total
+	}
+	end := total
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	window := metas[offset:end]
+	writeJSON(w, map[string]any{"pages": refs(window), "total": total, "offset": offset, "count": len(window)})
 }
 
 func (s *Server) apiPage(w http.ResponseWriter, r *http.Request) {
@@ -76,8 +93,12 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"hits": hits})
 }
 
-func (s *Server) apiGraph(w http.ResponseWriter, _ *http.Request) {
-	g, err := s.store.GraphView()
+func (s *Server) apiGraph(w http.ResponseWriter, r *http.Request) {
+	limit := 1000
+	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v >= 0 {
+		limit = v // 0 returns the full graph
+	}
+	g, err := s.store.GraphViewTop(limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

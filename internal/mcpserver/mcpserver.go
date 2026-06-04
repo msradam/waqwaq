@@ -119,21 +119,30 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		return nil, searchOut{Hits: hits}, nil
 	})
 
+	type graphIn struct {
+		Limit int `json:"limit,omitempty" jsonschema:"max pages to return, most-connected first; 0 uses a default cap suited to large wikis"`
+	}
 	type graphOut struct {
-		Pages []pageRef         `json:"pages"`
-		Edges []store.GraphEdge `json:"edges"`
+		Pages     []pageRef         `json:"pages"`
+		Edges     []store.GraphEdge `json:"edges"`
+		Truncated bool              `json:"truncated,omitempty"`
+		Total     int               `json:"total,omitempty"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "wiki_graph",
-		Description: "Return the wiki as a graph: pages as nodes and resolved [[wikilink]] references as directed edges.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, graphOut, error) {
-		metas, edges, err := st.Graph()
+		Description: "Return the wiki as a graph: pages as nodes and resolved [[wikilink]] references as directed edges. Large wikis are capped to the most-connected pages; pass limit to widen or narrow, and start from wiki_hubs.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in graphIn) (*mcp.CallToolResult, graphOut, error) {
+		limit := in.Limit
+		if limit <= 0 {
+			limit = 500
+		}
+		g, err := st.GraphViewTop(limit)
 		if err != nil {
 			return nil, graphOut{}, err
 		}
-		out := graphOut{Edges: edges}
-		for _, m := range metas {
-			out.Pages = append(out.Pages, pageRef{Slug: m.Slug, Title: m.Title})
+		out := graphOut{Edges: g.Edges, Truncated: g.Truncated, Total: g.Total}
+		for _, n := range g.Nodes {
+			out.Pages = append(out.Pages, pageRef{Slug: n.Slug, Title: n.Title})
 		}
 		return nil, out, nil
 	})

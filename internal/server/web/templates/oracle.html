@@ -88,7 +88,7 @@
     var iter = 0, maxIter = n > 400 ? 160 : 400;
     function loop(){ for (var s = 0; s < 4; s++){ step(); iter++; } draw();
       if (iter < maxIter && temp > 1.2){ requestAnimationFrame(loop); }
-      else { status.textContent = n + ' pages · ' + edges.length + ' links'; } }
+      else { status.textContent = (data.truncated ? 'the ' + n + ' most-connected of ' + data.total + ' pages' : n + ' pages') + ' · ' + edges.length + ' links'; } }
     requestAnimationFrame(loop);
   }).catch(function(){ status.textContent = 'Could not load the graph.'; });
 })();
