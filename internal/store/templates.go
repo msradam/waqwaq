@@ -11,7 +11,6 @@ import (
 const templatesDirName = "templates"
 
 // ListTemplates returns the names of page templates under .waqwaq/templates.
-// Templates are ordinary markdown files versioned with the wiki.
 func (s *Store) ListTemplates() []string {
 	entries, err := os.ReadDir(filepath.Join(s.gitRoot, ".waqwaq", templatesDirName))
 	if err != nil {

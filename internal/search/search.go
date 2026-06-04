@@ -13,10 +13,8 @@ import (
 	"github.com/msradam/waqwaq/internal/store"
 )
 
-// Index is the SQLite FTS5 full-text index, kept fresh by rebuilding only when
-// the store's mtime signature changes. It is excluded on z/OS, where the
-// modernc.org/sqlite driver does not build, and the caller falls back to the
-// store's substring search.
+// Index is the SQLite FTS5 full-text index, rebuilt only when the store's mtime
+// signature changes.
 type Index struct {
 	st  *store.Store
 	db  *sql.DB

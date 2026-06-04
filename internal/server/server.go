@@ -1,6 +1,5 @@
-// Package server is the human-facing side: a web UI for browsing and searching
-// the wiki and for reviewing proposed writes, plus the MCP endpoint mounted on
-// the same mux and the same port.
+// Package server provides the web UI for browsing, searching, and reviewing
+// wiki writes, plus the MCP endpoint mounted on the same mux and port.
 package server
 
 import (
@@ -440,8 +439,8 @@ func markNav(nodes []*navNode, active string) {
 	}
 }
 
-// handleUpload accepts a multipart file (images/pdf) from the editor, stores it
-// as a content-addressed asset, and returns its URL. Gated like editing.
+// handleUpload stores a multipart file as a content-addressed asset and returns
+// its URL. Gated like editing.
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	if s.readOnly || s.role(r) < RoleEditor {
 		http.Error(w, "forbidden", http.StatusForbidden)
@@ -591,8 +590,7 @@ type editView struct {
 }
 
 // handleEdit serves the in-browser editor. Saving runs the same lint as an MCP
-// write and commits through the store. It is gated like the review actions:
-// local access or a trusted token.
+// write before committing through the store, and requires editor access.
 func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
 	if s.readOnly {
 		http.Error(w, "server is read-only", http.StatusForbidden)
@@ -739,8 +737,7 @@ type diffPageView struct {
 	Diff   []diffLine
 }
 
-// handleDiff shows what a single revision changed, the page at that commit
-// compared against its parent.
+// handleDiff diffs a revision against its parent.
 func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 	slug := strings.TrimPrefix(r.URL.Path, "/diff/")
 	rev := r.URL.Query().Get("rev")

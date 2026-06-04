@@ -1,8 +1,7 @@
-// Package store is the git-backed markdown source of truth. It follows the
-// Karpathy LLM-wiki layout: pages live under wiki/, raw documents to synthesise
-// from live under raw/, and CLAUDE.md holds the schema. When no wiki/ directory
-// is present the served folder itself is treated as the pages root, so a bare
-// markdown folder or an existing Obsidian vault works without restructuring.
+// Package store is the git-backed markdown source of truth. Pages live under
+// wiki/ (or the served folder itself when there is no wiki/, so a bare folder
+// or Obsidian vault works unchanged), raw documents under raw/, schema in
+// CLAUDE.md.
 package store
 
 import (
@@ -91,8 +90,8 @@ func New(root string) (*Store, error) {
 		s.pages = abs
 	}
 	s.git = s.ensureGit()
-	// Keep secrets and scratch out of history, but let settings travel with the
-	// wiki: config.json and custom.css under .waqwaq/ stay versioned.
+	// Keep secrets and scratch out of history; settings (config.json, custom.css
+	// under .waqwaq/) stay versioned.
 	s.ensureIgnore(".waqwaq/tokens.json")
 	s.ensureIgnore(".waqwaq/proposals/")
 	return s, nil
@@ -124,8 +123,8 @@ func (s *Store) ensureIgnore(pattern string) {
 func (s *Store) Root() string  { return s.gitRoot }
 func (s *Store) Pages() string { return s.pages }
 
-// Layout reports whether pages are served from a wiki/ subdirectory (the
-// canonical Karpathy layout) or from the folder itself (vault mode).
+// Layout reports whether pages are served from a wiki/ subdirectory or the
+// folder itself (vault mode).
 func (s *Store) Layout() string {
 	if s.pages == s.gitRoot {
 		return "folder"
@@ -192,9 +191,9 @@ func (s *Store) List() ([]PageMeta, error) {
 	return metas, nil
 }
 
-// Signature is a cheap hash of every page's path, mtime, and size. It changes
-// whenever any page is added, removed, or edited, including by external tools,
-// so a search index can detect staleness with stats alone, no file reads.
+// Signature is a hash of every page's path, mtime, and size, so a cache can
+// detect staleness (including edits by external tools) from stats alone, no
+// file reads.
 func (s *Store) Signature() (string, error) {
 	h := sha256.New()
 	err := filepath.WalkDir(s.pages, func(path string, d os.DirEntry, err error) error {
@@ -373,8 +372,8 @@ func (s *Store) titleOf(path, slug string) string {
 	return filepath.Base(slug)
 }
 
-// commit stages only the given paths (relative to gitRoot) and commits them, so
-// a page write never sweeps in unrelated working-tree changes.
+// commit stages only the given paths (relative to gitRoot), so a write never
+// sweeps in unrelated working-tree changes.
 func (s *Store) commit(message, author string, paths ...string) error {
 	if !s.git || len(paths) == 0 {
 		return nil
@@ -410,9 +409,8 @@ type Attribution struct {
 
 var approverRe = regexp.MustCompile(`approved by (\S+)`)
 
-// LastTouched returns the last commit that changed a page: its author (the
-// proposer, for a merged proposal), the approver parsed from the commit
-// message, and the time. It reports false when there is no git history.
+// LastTouched returns the author, the approver (parsed from the commit message),
+// and time of the last commit to change a page; false when there is no history.
 func (s *Store) LastTouched(slug string) (*Attribution, bool) {
 	if !s.git {
 		return nil, false
@@ -443,10 +441,9 @@ func (s *Store) LastTouched(slug string) (*Attribution, bool) {
 	return a, true
 }
 
-// SplitFrontmatter separates a leading frontmatter block from the markdown body
-// and returns its fields. It reads YAML (--- ... ---), TOML (+++ ... +++), and
-// JSON, so Hugo, Zola, and org-export vaults parse alongside the native YAML. It
-// returns a nil map when there is no frontmatter.
+// SplitFrontmatter separates a leading frontmatter block from the markdown body.
+// It reads YAML (--- ... ---), TOML (+++ ... +++), and JSON, and returns a nil
+// map when there is no frontmatter.
 func SplitFrontmatter(raw string) (map[string]any, string) {
 	norm := strings.ReplaceAll(raw, "\r\n", "\n")
 	var fm map[string]any

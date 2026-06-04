@@ -105,7 +105,7 @@ func TestLinkHygiene(t *testing.T) {
 	}
 	w("authoring-content", "---\ntitle: Authoring\n---\nbase page\n")
 	w("guide/setup", "---\ntitle: Setup\n---\nx\n")
-	// A page exercising every convention the real-KB tests surfaced.
+	// A page exercising every supported link convention.
 	w("index", "---\ntitle: Home\n---\n"+
 		"Obsidian: [[guide/setup]]\n"+ // normal
 		"Space fold: [[Authoring Content]]\n"+ // space -> hyphen, case

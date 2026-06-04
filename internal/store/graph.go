@@ -28,9 +28,8 @@ type Health struct {
 	Stale   []StalePage  `json:"stale"`
 }
 
-// graphData builds (and caches by mtime signature) the link graph: pages,
-// resolved [[wikilink]] edges, and broken links pointing at missing pages. It is
-// recomputed only when a page changes, so backlinks and health stay cheap.
+// graphData builds the link graph (pages, resolved [[wikilink]] edges, broken
+// links to missing pages), cached by signature so it recomputes only on change.
 func (s *Store) graphData() ([]PageMeta, []GraphEdge, []BrokenLink, error) {
 	sig, err := s.Signature()
 	if err != nil {
@@ -75,9 +74,8 @@ func (s *Store) graphData() ([]PageMeta, []GraphEdge, []BrokenLink, error) {
 			}
 			addEdge(canon)
 		}
-		// Plain markdown links to internal pages also count as edges (GitHub wikis
-		// and hand-written wikis link this way), but a missing one is not flagged
-		// as broken, since markdown links to external files are common and benign.
+		// Plain markdown links to internal pages also count as edges, but a missing
+		// one is not flagged broken: markdown links to external files are benign.
 		for _, t := range markdownLinkTargets(body) {
 			addEdge(resolver.resolve(t))
 		}
@@ -110,8 +108,8 @@ func (s *Store) Backlinks(slug string) ([]PageMeta, error) {
 
 var rootSlugs = map[string]bool{"index": true, "README": true, "readme": true, "home": true, "Home": true}
 
-// Health reports pages that need attention: orphans (no incoming links), broken
-// wikilinks, and pages untouched for longer than staleDays.
+// Health reports orphans (no incoming links), broken wikilinks, and pages
+// untouched for longer than staleDays.
 func (s *Store) Health() (*Health, error) {
 	metas, edges, broken, err := s.graphData()
 	if err != nil {
@@ -135,9 +133,8 @@ func (s *Store) Health() (*Health, error) {
 }
 
 // linkResolver maps a raw wikilink target to a canonical page slug the way
-// Obsidian and GitHub wikis do: an exact slug wins, then a case-insensitive
-// exact match, then a basename match (the page with that file name anywhere in
-// the tree, the shortest path breaking ties). It returns "" when nothing matches.
+// Obsidian and GitHub wikis do: exact slug, then case-insensitive, then basename
+// (shortest path breaking ties). It returns "" when nothing matches.
 type linkResolver struct {
 	exact map[string]string
 	lower map[string]string
@@ -186,9 +183,8 @@ func (r *linkResolver) resolve(target string) string {
 	return ""
 }
 
-// normalize folds case and treats spaces and hyphens as equivalent, so a link
-// written "Authoring Content" reaches a page filed as "authoring-content", the
-// way Obsidian and GitHub wikis slugify.
+// normalize folds case and maps spaces to hyphens, so a link "Authoring Content"
+// reaches a page filed as "authoring-content", the way Obsidian/GitHub slugify.
 func normalize(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	return strings.ReplaceAll(s, " ", "-")
@@ -271,8 +267,8 @@ func resolveTarget(r *linkResolver, raw string) string {
 	return ""
 }
 
-// isAssetRef reports whether a target points at an image or other asset file
-// rather than a page, so a missing one is not counted as a broken page link.
+// isAssetRef reports whether a target points at an asset file rather than a
+// page, so a missing one is not counted as a broken page link.
 func isAssetRef(target string) bool {
 	t := target
 	if i := strings.IndexAny(t, "|#"); i >= 0 {
@@ -323,8 +319,7 @@ func shorterSlug(a, b string) bool {
 }
 
 // ResolveLink maps a wikilink target (which may carry a |alias or #anchor) to a
-// known page slug, matching the wiki's link graph. It returns false when the
-// target does not resolve to any page.
+// known page slug, false when it resolves to no page.
 func (s *Store) ResolveLink(target string) (string, bool) {
 	metas, _, _, err := s.graphData()
 	if err != nil {
@@ -358,8 +353,8 @@ type GraphView struct {
 }
 
 // adjacency returns the page list, a slug->title map, and an undirected
-// adjacency map over resolved links. Links are treated as bidirectional for
-// navigation: if A references B, the two are neighbors either way.
+// adjacency map: links are bidirectional for navigation, so A->B makes the two
+// neighbors either way.
 func (s *Store) adjacency() ([]PageMeta, map[string]string, map[string][]string, error) {
 	metas, edges, _, err := s.graphData()
 	if err != nil {
@@ -425,7 +420,7 @@ func (s *Store) Neighbors(slug string, depth int) ([]Neighbor, error) {
 
 // Path returns the shortest chain of pages connecting from to to over the
 // undirected link graph, inclusive of both ends, or nil if they are not
-// connected. It is how an agent answers "how does X relate to Y".
+// connected.
 func (s *Store) Path(from, to string) ([]PageMeta, error) {
 	_, title, adj, err := s.adjacency()
 	if err != nil {
@@ -466,8 +461,7 @@ func (s *Store) Path(from, to string) ([]PageMeta, error) {
 	return rev, nil
 }
 
-// Hubs returns the n most-connected pages by undirected degree, the natural
-// entry points into an unfamiliar wiki.
+// Hubs returns the n most-connected pages by undirected degree.
 func (s *Store) Hubs(n int) ([]Hub, error) {
 	metas, title, adj, err := s.adjacency()
 	if err != nil {

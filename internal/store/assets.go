@@ -18,7 +18,7 @@ var allowedAssetExt = map[string]bool{
 }
 
 // AddAsset stores an uploaded file under assets/ with a content-addressed name
-// (so identical uploads dedupe), commits it, and returns the stored file name.
+// (so identical uploads dedupe), commits it, and returns the stored name.
 func (s *Store) AddAsset(data []byte, originalName string) (string, error) {
 	ext := strings.ToLower(filepath.Ext(originalName))
 	if !allowedAssetExt[ext] {
@@ -50,11 +50,10 @@ func (s *Store) AssetPath(name string) (string, error) {
 	return filepath.Join(s.gitRoot, assetsDirName, name), nil
 }
 
-// VaultAsset finds an existing image or PDF in the wiki by its basename, so an
-// Obsidian-style ![[image.png]] embed resolves to the file wherever it lives in
-// the tree. Only the safe types in allowedAssetExt are served; SVG and others
-// are excluded as XSS vectors. The path returned comes from a server-built index
-// of files actually present, never from the request.
+// VaultAsset resolves an Obsidian-style ![[image.png]] embed to the file by its
+// basename wherever it lives in the tree. Only allowedAssetExt types are served
+// (SVG excluded as an XSS vector), and the path comes from a server-built index
+// of files present, never from the request.
 func (s *Store) VaultAsset(name string) (string, bool) {
 	if !allowedAssetExt[strings.ToLower(filepath.Ext(name))] {
 		return "", false

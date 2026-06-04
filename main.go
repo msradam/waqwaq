@@ -222,10 +222,9 @@ func cmdServe(args []string) {
 	_ = httpSrv.Shutdown(ctx)
 }
 
-// buildWiki assembles one wiki's full stack (store, auth, review queue, search
-// index, MCP server, web server) for a data directory. base is "" for a single
-// wiki at the root, or "/w/<name>" in farm mode. The returned cleanup closes the
-// search index.
+// buildWiki assembles one wiki's full stack for a data directory. base is "" for
+// a single wiki at the root, or "/w/<name>" in farm mode. The returned cleanup
+// closes the search index.
 func buildWiki(dir, base string, readOnly, forceReview bool, tokensPath string, wikis []server.WikiRef) (*server.Server, func(), config.Config, *auth.Registry, error) {
 	cleanup := func() {}
 	st, err := store.New(dir)
@@ -546,9 +545,9 @@ type diag struct {
 	msg   string
 }
 
-// cmdDoctor inspects a wiki's setup, MCP/access posture, and content health, and
-// exits non-zero if it finds a problem. It is the "is this wired up right" check,
-// distinct from content linting.
+// cmdDoctor checks a wiki's setup, MCP/access posture, and health, exiting
+// non-zero on a problem. This is the "is this wired up right" check, distinct
+// from content linting.
 func cmdDoctor(args []string) {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
 	rest := parseArgs(fs, args)
@@ -848,8 +847,8 @@ func cmdGrep(args []string) {
 }
 
 // scopeSet is the set of slugs allowed by --tag and --links-to (their
-// intersection), or nil when neither is set. This is graph-aware scoping that
-// plain grep cannot express: "search only pages that link to X".
+// intersection), or nil when neither is set. This is graph-aware scoping plain
+// grep cannot express ("search only pages that link to X").
 func scopeSet(base kb.KnowledgeBase, tag, linksTo string) map[string]bool {
 	if tag == "" && linksTo == "" {
 		return nil

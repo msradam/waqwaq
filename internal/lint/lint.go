@@ -1,6 +1,5 @@
-// Package lint runs at the write boundary: every page an agent or human writes
-// is checked before it lands, so AI slop never reaches the source of truth. A
-// built-in title check and link resolution always run; Rules add per-wiki
+// Package lint checks a page before it is written: a non-empty title is required
+// and wikilinks are resolved against the known pages. Rules add per-wiki
 // requirements from config.
 package lint
 

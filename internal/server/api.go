@@ -8,9 +8,9 @@ import (
 	"github.com/msradam/waqwaq/internal/store"
 )
 
-// The /api routes expose the same reads as the MCP tools as plain JSON, so a CI
-// job, dashboard, or script that is not an MCP client can query the wiki. They
-// follow the same access rules as the rest of the web UI.
+// The /api routes expose the same reads as the MCP tools as plain JSON, for
+// non-MCP clients (CI jobs, dashboards, scripts). They follow the same access
+// rules as the rest of the web UI.
 
 type apiRef struct {
 	Slug  string `json:"slug"`

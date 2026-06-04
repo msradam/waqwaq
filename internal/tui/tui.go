@@ -1,8 +1,6 @@
 // Package tui is the terminal reader: an interactive shell over the same
-// kb.KnowledgeBase the CLI verbs use. The left list is the TOC, a filtered view,
-// full-text results, or the current page's graph neighbourhood; the right pane
-// is the page rendered for the terminal. It works against a local folder or a
-// remote server without knowing which.
+// kb.KnowledgeBase the CLI verbs use, against a local folder or a remote server
+// without knowing which.
 package tui
 
 import (
@@ -182,9 +180,9 @@ func (m *Model) open(slug string) {
 	m.render(m.cur)
 }
 
-// ensureRenderer builds the Glamour renderer once per width, with a fixed style
-// chosen at startup. WithStandardStyle avoids the per-render terminal query that
-// WithAutoStyle does, which stalls inside the Bubble Tea alt-screen.
+// ensureRenderer builds the Glamour renderer once per width. WithStandardStyle
+// avoids the per-render terminal query WithAutoStyle does, which stalls inside
+// the Bubble Tea alt-screen.
 func (m *Model) ensureRenderer() {
 	width := m.vp.Width - 2
 	if width < 20 {
@@ -299,7 +297,6 @@ func (m Model) View() string {
 		return "loading…"
 	}
 	listFocus := m.focus == 0
-	// Light up the focused pane's header; dim the other.
 	m.list.Styles.Title = focusStyle
 	if !listFocus {
 		m.list.Styles.Title = blurStyle

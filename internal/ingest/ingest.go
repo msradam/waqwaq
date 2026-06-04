@@ -1,8 +1,6 @@
 // Package ingest turns a source repository into a Waqwaq wiki: one markdown page
 // per package, linked by the package's real dependency edges as [[wikilinks]].
-// It is deterministic, the structure comes from the code, not an LLM. The Go
-// path uses golang.org/x/tools/go/packages (pure Go, no cgo) for the import
-// graph and go/doc for the package documentation.
+// It is deterministic; the structure comes from the code, not an LLM.
 package ingest
 
 import (
@@ -151,8 +149,7 @@ func oneline(dp *doc.Package, s string) string {
 	return "(undocumented)"
 }
 
-// sanitizeDoc neutralises [[ ]] in plain Go doc text so prose that happens to
-// mention wikilink syntax does not render as a (broken) wikilink in the page.
+// sanitizeDoc neutralises [[ ]] in Go doc text so prose does not become a wikilink.
 func sanitizeDoc(s string) string {
 	return strings.NewReplacer("[[", "[", "]]", "]").Replace(s)
 }

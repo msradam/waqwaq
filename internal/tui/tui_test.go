@@ -47,7 +47,6 @@ func TestModelOpensAndWalksGraph(t *testing.T) {
 		t.Fatalf("list title = %q, want 'related: index'", mm.list.Title)
 	}
 
-	// 'q' quits.
 	if _, cmd := mm.Update(key("q")); cmd == nil {
 		t.Fatal("q should return a command")
 	}

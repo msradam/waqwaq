@@ -1,8 +1,6 @@
-// Package kb defines the read contract every Waqwaq surface targets. The local
-// *store.Store and the remote *kbclient.Client both satisfy KnowledgeBase, so a
-// CLI verb, the TUI, or an agent runs the same against a folder or a server URL.
-// The store types are the intermediate representation; this interface is the
-// core. Surfaces depend on the contract, never on a backend.
+// Package kb defines the read contract every Waqwaq surface targets. Both the
+// local *store.Store and the remote *kbclient.Client satisfy KnowledgeBase, so
+// surfaces depend on the contract, never on a backend.
 package kb
 
 import "github.com/msradam/waqwaq/internal/store"
@@ -21,5 +19,4 @@ type KnowledgeBase interface {
 	ResolveLink(target string) (string, bool)
 }
 
-// The local store is the reference implementation of the contract.
 var _ KnowledgeBase = (*store.Store)(nil)

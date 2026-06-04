@@ -10,8 +10,8 @@ import (
 	"github.com/msradam/waqwaq/internal/store"
 )
 
-// The most important doctor check is the security posture: a wiki whose web UI
-// requires login but whose MCP endpoint is left open (no tokens.json).
+// Doctor must flag the posture where the web UI requires login but the MCP
+// endpoint is left open (no tokens.json).
 func TestDoctorFlagsOpenMCPBehindWebAuth(t *testing.T) {
 	dir := t.TempDir()
 	mk := func(rel, content string) {

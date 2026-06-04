@@ -1,8 +1,6 @@
 // Package kbclient is the remote implementation of kb.KnowledgeBase. It carries
-// no logic of its own: it forwards each call to a waqwaq server's /api and
-// deserialises the IR, so a remote answer is identical to the local one by
-// construction. The resolution, ranking, and link graph all stay computed once,
-// on the server.
+// no logic of its own: it forwards each call to a waqwaq server's /api, so the
+// resolution, ranking, and link graph all stay computed once, on the server.
 package kbclient
 
 import (

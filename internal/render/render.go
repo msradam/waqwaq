@@ -1,8 +1,6 @@
-// Package render turns wiki markdown into HTML: GFM, syntax highlighting,
-// client-side Mermaid diagrams, [[wikilinks]], heading anchors, and GitHub or
-// Obsidian style callouts ([!NOTE] blockquotes). It also extracts a heading
-// outline for the right-rail table of contents, using a separate clean parse so
-// anchor glyphs never leak into it.
+// Package render turns wiki markdown into HTML (GFM, syntax highlighting,
+// client-side Mermaid, [[wikilinks]], heading anchors, GitHub/Obsidian callouts)
+// and extracts a heading outline for the table of contents.
 package render
 
 import (
@@ -36,7 +34,7 @@ type Renderer struct {
 }
 
 // New builds a renderer. base is the URL prefix wikilinks resolve against:
-// "" for a single wiki at the root, "/w/<name>" for a wiki in farm mode.
+// "" for a single wiki at the root, "/w/<name>" in farm mode.
 func New(base string) *Renderer {
 	md := goldmark.New(
 		goldmark.WithExtensions(
@@ -103,7 +101,7 @@ func nodeText(n ast.Node, src []byte) string {
 }
 
 // calloutTransformer turns a blockquote whose first line is `[!TYPE]` into a
-// styled admonition, the GitHub and Obsidian callout convention. It only sets a
+// styled admonition (the GitHub/Obsidian callout convention). It only sets a
 // class and trims the marker, reusing goldmark's blockquote parser, so it cannot
 // crash on malformed input.
 type calloutTransformer struct{}
@@ -138,8 +136,7 @@ func (calloutTransformer) Transform(doc *ast.Document, reader text.Reader, _ par
 }
 
 // stripLeading removes the first n source bytes of inline content from a
-// paragraph, trimming or dropping the leading text nodes that the callout marker
-// was split across.
+// paragraph, dropping or trimming the leading text nodes they span.
 func stripLeading(para ast.Node, n int) {
 	for c := para.FirstChild(); c != nil && n > 0; {
 		next := c.NextSibling()
@@ -174,8 +171,7 @@ func (w wikiResolver) ResolveWikilink(n *wikilink.Node) ([]byte, error) {
 }
 
 // slugFragment turns a wikilink heading fragment ([[Page#Some Heading]]) into the
-// id goldmark generates for that heading (lowercase, spaces to hyphens, other
-// punctuation dropped without collapsing), so the anchor actually lands.
+// id goldmark generates for that heading, so the anchor actually lands.
 func slugFragment(s string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(s) {

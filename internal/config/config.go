@@ -1,6 +1,5 @@
 // Package config loads optional per-wiki settings from .waqwaq/config.json. A
-// missing file yields built-in defaults, so zero-config use is unchanged. The
-// file is the whole tuning surface: appearance, defaults, and lint rules.
+// missing file yields built-in defaults.
 package config
 
 import (
