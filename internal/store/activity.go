@@ -135,23 +135,44 @@ func (s *Store) Tags() (map[string][]PageMeta, error) {
 
 // FrontmatterTags reads the tags field, accepting either a YAML list or a
 // comma-separated string.
+// FrontmatterTags collects a page's tags from the frontmatter: the `tags` field
+// (a list or a comma string), Hugo's `categories`, and the values of a Hugo/Zola
+// `[taxonomies]` table.
 func FrontmatterTags(fm map[string]any) []string {
 	if fm == nil {
 		return nil
 	}
 	var out []string
-	switch v := fm["tags"].(type) {
-	case []any:
-		for _, x := range v {
-			if s, ok := x.(string); ok && strings.TrimSpace(s) != "" {
-				out = append(out, strings.TrimSpace(s))
+	seen := map[string]bool{}
+	add := func(v any) {
+		var vals []string
+		switch t := v.(type) {
+		case []any:
+			for _, x := range t {
+				if s, ok := x.(string); ok {
+					vals = append(vals, s)
+				}
+			}
+		case string:
+			vals = strings.Split(t, ",")
+		}
+		for _, s := range vals {
+			if s = strings.TrimSpace(s); s != "" && !seen[s] {
+				seen[s] = true
+				out = append(out, s)
 			}
 		}
-	case string:
-		for _, p := range strings.Split(v, ",") {
-			if p = strings.TrimSpace(p); p != "" {
-				out = append(out, p)
-			}
+	}
+	add(fm["tags"])
+	add(fm["categories"])
+	switch tax := fm["taxonomies"].(type) {
+	case map[string]any:
+		for _, v := range tax {
+			add(v)
+		}
+	case map[any]any:
+		for _, v := range tax {
+			add(v)
 		}
 	}
 	return out

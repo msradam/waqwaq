@@ -250,6 +250,7 @@ func stripCode(body string) string {
 // piped target tries both sides, so it handles Obsidian [[target|label]] and
 // Dendron/GitHub [[label|target]] alike.
 func resolveTarget(r *linkResolver, raw string) string {
+	raw = unescapePipe(raw)
 	parts := []string{raw}
 	if i := strings.Index(raw, "|"); i >= 0 {
 		parts = []string{raw[:i], raw[i+1:]}
@@ -265,6 +266,13 @@ func resolveTarget(r *linkResolver, raw string) string {
 		}
 	}
 	return ""
+}
+
+// unescapePipe normalizes a wikilink target so a table-escaped pipe (\|) or an
+// HTML-entity pipe (&#124;) is treated as the | separator, the way these appear
+// inside Obsidian table cells.
+func unescapePipe(s string) string {
+	return strings.NewReplacer(`\|`, "|", "&#124;", "|", "&#x7c;", "|", "&#x7C;", "|").Replace(s)
 }
 
 // isAssetRef reports whether a target points at an asset file rather than a
@@ -284,16 +292,13 @@ func isAssetRef(target string) bool {
 }
 
 // brokenName is the cleaned target shown in the broken-link report.
+// brokenName is the target reported for an unresolved wikilink: the side before
+// the pipe (the Obsidian convention), with an escaped pipe normalized and the
+// #anchor stripped. A bare #anchor link yields "" and is not reported.
 func brokenName(raw string) string {
-	t := raw
+	t := unescapePipe(raw)
 	if i := strings.Index(t, "|"); i >= 0 {
-		// For a piped link, the half that is not a bare label is the real target.
-		l, r := strings.TrimSpace(t[:i]), strings.TrimSpace(t[i+1:])
-		if strings.ContainsAny(r, "/.-") || !strings.Contains(r, " ") {
-			t = r
-		} else {
-			t = l
-		}
+		t = t[:i]
 	}
 	if i := strings.Index(t, "#"); i >= 0 {
 		t = t[:i]

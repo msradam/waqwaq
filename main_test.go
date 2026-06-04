@@ -61,15 +61,32 @@ func TestCheckFindsContentProblems(t *testing.T) {
 		}
 		return false
 	}
-	if !hasError("notitle", "title") {
-		t.Errorf("expected a title error for the title-less page, got %+v", findings)
-	}
 	if !hasError("dangling", "broken wikilink") {
 		t.Errorf("expected a broken-link error, got %+v", findings)
+	}
+	// A missing frontmatter title is no longer an error (the title is derivable).
+	if hasError("notitle", "title") {
+		t.Errorf("check should not error on a missing frontmatter title, got %+v", findings)
 	}
 	for _, f := range findings {
 		if f.Slug == "good" && f.Severity == "error" {
 			t.Errorf("the clean page should have no errors, got %+v", f)
+		}
+	}
+}
+
+func TestCheckIgnoresDerivableTitle(t *testing.T) {
+	st, err := store.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No frontmatter at all; the title comes from the H1. check must not error.
+	if err := st.Write("h1only", "# A Real Title\n\nbody text\n", "", "m"); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range runCheck(st, lint.Rules{}) {
+		if f.Severity == "error" && strings.Contains(f.Message, "title") {
+			t.Errorf("check should not error on a page titled by its H1, got %+v", f)
 		}
 	}
 }

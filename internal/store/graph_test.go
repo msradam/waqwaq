@@ -143,6 +143,47 @@ func TestLinkHygiene(t *testing.T) {
 	}
 }
 
+func TestEscapedPipeLinks(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := func(slug, content string) {
+		if err := s.Write(slug, content, "", "m"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w("right-to-left", "---\ntitle: RTL\n---\nx\n")
+	// A table cell escapes its pipe as \| ; an HTML-entity pipe also appears.
+	w("tbl", "---\ntitle: T\n---\n[[Right-to-left\\|LTR]] and [[no-such&#124;Label]]\n")
+
+	if in, _ := s.Backlinks("right-to-left"); len(in) != 1 || in[0].Slug != "tbl" {
+		t.Fatalf("escaped-pipe link should resolve to right-to-left, backlinks=%+v", in)
+	}
+	h, err := s.Health()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h.Broken) != 1 || h.Broken[0].To != "no-such" {
+		t.Fatalf("broken should report the target side 'no-such', got %+v", h.Broken)
+	}
+}
+
+func TestTaxonomyTags(t *testing.T) {
+	tags := FrontmatterTags(map[string]any{
+		"taxonomies": map[string]any{"tags": []any{"go", "wiki"}, "categories": []any{"dev"}},
+	})
+	want := map[string]bool{"go": true, "wiki": true, "dev": true}
+	if len(tags) != 3 {
+		t.Fatalf("taxonomy tags = %v, want go/wiki/dev", tags)
+	}
+	for _, x := range tags {
+		if !want[x] {
+			t.Errorf("unexpected tag %q in %v", x, tags)
+		}
+	}
+}
+
 func TestGraphPrimitives(t *testing.T) {
 	s := seed(t)
 	nb, err := s.Neighbors("index", 1)
