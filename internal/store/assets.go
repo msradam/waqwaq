@@ -49,3 +49,53 @@ func (s *Store) AssetPath(name string) (string, error) {
 	}
 	return filepath.Join(s.gitRoot, assetsDirName, name), nil
 }
+
+// VaultAsset finds an existing image or PDF in the wiki by its basename, so an
+// Obsidian-style ![[image.png]] embed resolves to the file wherever it lives in
+// the tree. Only the safe types in allowedAssetExt are served; SVG and others
+// are excluded as XSS vectors. The path returned comes from a server-built index
+// of files actually present, never from the request.
+func (s *Store) VaultAsset(name string) (string, bool) {
+	if !allowedAssetExt[strings.ToLower(filepath.Ext(name))] {
+		return "", false
+	}
+	idx, err := s.vaultAssetIndex()
+	if err != nil {
+		return "", false
+	}
+	p, ok := idx[strings.ToLower(name)]
+	return p, ok
+}
+
+func (s *Store) vaultAssetIndex() (map[string]string, error) {
+	sig, err := s.Signature()
+	if err != nil {
+		return nil, err
+	}
+	s.assetMu.Lock()
+	defer s.assetMu.Unlock()
+	if sig == s.assetSig && s.assetMap != nil {
+		return s.assetMap, nil
+	}
+	idx := map[string]string{}
+	_ = filepath.WalkDir(s.pages, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if p != s.pages && (d.Name() == ".git" || d.Name() == ".waqwaq" || p == s.raw) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if allowedAssetExt[strings.ToLower(filepath.Ext(d.Name()))] {
+			key := strings.ToLower(d.Name())
+			if _, exists := idx[key]; !exists {
+				idx[key] = p
+			}
+		}
+		return nil
+	})
+	s.assetSig, s.assetMap = sig, idx
+	return idx, nil
+}

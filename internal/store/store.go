@@ -45,6 +45,10 @@ type Store struct {
 	graphMetas  []PageMeta
 	graphEdges  []GraphEdge
 	graphBroken []BrokenLink
+
+	assetMu  sync.Mutex // guards the asset-by-basename index below
+	assetSig string
+	assetMap map[string]string
 }
 
 type PageMeta struct {
