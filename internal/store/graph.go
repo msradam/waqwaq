@@ -44,10 +44,7 @@ func (s *Store) graphData() ([]PageMeta, []GraphEdge, []BrokenLink, error) {
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	known := make(map[string]bool, len(metas))
-	for _, m := range metas {
-		known[m.Slug] = true
-	}
+	resolver := newLinkResolver(metas)
 	var edges []GraphEdge
 	var broken []BrokenLink
 	for _, m := range metas {
@@ -55,22 +52,26 @@ func (s *Store) graphData() ([]PageMeta, []GraphEdge, []BrokenLink, error) {
 		if err != nil {
 			continue
 		}
-		seen := map[string]bool{}
+		seenTo := map[string]bool{}
 		for _, match := range wikiLinkRe.FindAllStringSubmatch(page.Body, -1) {
 			target := match[1]
 			if i := strings.IndexAny(target, "|#"); i >= 0 {
 				target = target[:i]
 			}
 			target = strings.TrimSpace(target)
-			if target == "" || seen[target] {
+			if target == "" {
 				continue
 			}
-			seen[target] = true
-			if known[target] {
-				edges = append(edges, GraphEdge{From: m.Slug, To: target})
-			} else {
+			canon := resolver.resolve(target)
+			if canon == "" {
 				broken = append(broken, BrokenLink{From: m.Slug, To: target})
+				continue
 			}
+			if canon == m.Slug || seenTo[canon] {
+				continue
+			}
+			seenTo[canon] = true
+			edges = append(edges, GraphEdge{From: m.Slug, To: canon})
 		}
 	}
 	s.graphSig, s.graphMetas, s.graphEdges, s.graphBroken = sig, metas, edges, broken
@@ -123,6 +124,82 @@ func (s *Store) Health() (*Health, error) {
 	}
 	sort.Slice(h.Stale, func(i, j int) bool { return h.Stale[i].Days > h.Stale[j].Days })
 	return h, nil
+}
+
+// linkResolver maps a raw wikilink target to a canonical page slug the way
+// Obsidian and GitHub wikis do: an exact slug wins, then a case-insensitive
+// exact match, then a basename match (the page with that file name anywhere in
+// the tree, the shortest path breaking ties). It returns "" when nothing matches.
+type linkResolver struct {
+	exact map[string]string
+	lower map[string]string
+	base  map[string]string
+}
+
+func newLinkResolver(metas []PageMeta) *linkResolver {
+	r := &linkResolver{
+		exact: make(map[string]string, len(metas)),
+		lower: make(map[string]string, len(metas)),
+		base:  make(map[string]string, len(metas)),
+	}
+	for _, m := range metas {
+		r.exact[m.Slug] = m.Slug
+		r.lower[strings.ToLower(m.Slug)] = m.Slug
+		key := strings.ToLower(baseName(m.Slug))
+		if cur, ok := r.base[key]; !ok || shorterSlug(m.Slug, cur) {
+			r.base[key] = m.Slug
+		}
+	}
+	return r
+}
+
+func (r *linkResolver) resolve(target string) string {
+	if s, ok := r.exact[target]; ok {
+		return s
+	}
+	if s, ok := r.lower[strings.ToLower(target)]; ok {
+		return s
+	}
+	if s, ok := r.base[strings.ToLower(baseName(target))]; ok {
+		return s
+	}
+	return ""
+}
+
+func baseName(slug string) string {
+	if i := strings.LastIndex(slug, "/"); i >= 0 {
+		return slug[i+1:]
+	}
+	return slug
+}
+
+// shorterSlug reports whether a is the better basename match than b: fewer path
+// segments first, then alphabetical, so ties resolve deterministically.
+func shorterSlug(a, b string) bool {
+	na, nb := strings.Count(a, "/"), strings.Count(b, "/")
+	if na != nb {
+		return na < nb
+	}
+	return a < b
+}
+
+// ResolveLink maps a wikilink target (which may carry a |alias or #anchor) to a
+// known page slug, matching the wiki's link graph. It returns false when the
+// target does not resolve to any page.
+func (s *Store) ResolveLink(target string) (string, bool) {
+	metas, _, _, err := s.graphData()
+	if err != nil {
+		return "", false
+	}
+	if i := strings.IndexAny(target, "|#"); i >= 0 {
+		target = target[:i]
+	}
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return "", false
+	}
+	canon := newLinkResolver(metas).resolve(target)
+	return canon, canon != ""
 }
 
 func (s *Store) ageDays(slug string) int {

@@ -531,6 +531,10 @@ func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 	slug := strings.TrimPrefix(r.URL.Path, "/wiki/")
 	page, err := s.store.Read(slug)
 	if err != nil {
+		if canon, ok := s.store.ResolveLink(slug); ok && canon != slug {
+			http.Redirect(w, r, s.base+"/wiki/"+canon, http.StatusMovedPermanently)
+			return
+		}
 		s.notFound(w, r, slug)
 		return
 	}
