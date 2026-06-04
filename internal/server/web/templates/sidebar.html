@@ -6,10 +6,10 @@
 {{if .CustomCSS}}<link rel="stylesheet" href="{{.Base}}/custom.css">{{end}}
 {{end}}
 
-{{define "navtree"}}{{range .}}{{if .Children}}<details class="nav-folder"{{if .Open}} open{{end}}><summary>{{if .Slug}}<a href="{{.Base}}/wiki/{{.Slug}}"{{if .Active}} class="active"{{end}}>{{.Title}}</a>{{else}}{{.Name}}{{end}}</summary><div class="nav-children">{{template "navtree" .Children}}</div></details>{{else}}<a class="nav-link{{if .Active}} active{{end}}" href="{{.Base}}/wiki/{{.Slug}}">{{.Title}}</a>{{end}}{{end}}{{end}}
+{{define "navtree"}}{{range .}}{{if .More}}<span class="nav-more">+{{.More}} more · search to find</span>{{else if or .Children .Lazy}}<details class="nav-folder"{{if .Open}} open{{end}}{{if .Lazy}} data-path="{{.Path}}"{{end}}><summary>{{if .Slug}}<a href="{{.Base}}/wiki/{{.Slug}}"{{if .Active}} class="active"{{end}}>{{.Title}}</a>{{else}}{{.Name}}{{end}}</summary><div class="nav-children"{{if .Lazy}} data-lazy="1"{{end}}>{{template "navtree" .Children}}</div></details>{{else}}<a class="nav-link{{if .Active}} active{{end}}" href="{{.Base}}/wiki/{{.Slug}}">{{.Title}}</a>{{end}}{{end}}{{end}}
 
 {{define "sidebar"}}
-<aside class="sidebar">
+<aside class="sidebar" data-base="{{.Base}}" data-active="{{.Active}}">
   <a class="brand" href="{{.Base}}/">🌳 {{.SiteTitle}}</a>
   {{if .Wikis}}
   <div class="switcher">
@@ -29,4 +29,22 @@
     {{if .Nav}}{{template "navtree" .Nav}}{{else}}<span class="muted">No pages yet.</span>{{end}}
   </nav>
 </aside>
+<script>
+(function(){
+  var bar = document.querySelector('.sidebar');
+  if (!bar) return;
+  var base = bar.dataset.base || '', active = bar.dataset.active || '';
+  document.addEventListener('toggle', function(e){
+    var d = e.target;
+    if (!d || d.tagName !== 'DETAILS' || !d.open || !d.dataset.path) return;
+    var box = d.querySelector('.nav-children[data-lazy]');
+    if (!box) return;
+    box.removeAttribute('data-lazy');
+    fetch(base + '/nav?path=' + encodeURIComponent(d.dataset.path) + '&active=' + encodeURIComponent(active))
+      .then(function(r){ return r.text(); })
+      .then(function(html){ box.innerHTML = html; })
+      .catch(function(){ box.textContent = '…'; });
+  }, true);
+})();
+</script>
 {{end}}

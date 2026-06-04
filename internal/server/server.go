@@ -306,6 +306,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/oracle", s.handleOracle)
 	mux.HandleFunc("/graph.json", s.handleGraphJSON)
+	mux.HandleFunc("/nav", s.handleNav)
 	mux.HandleFunc("/tags/", s.handleTags)
 	mux.HandleFunc("/tags", s.handleTags)
 	mux.HandleFunc("/history/", s.handleHistory)
@@ -410,8 +411,12 @@ type chrome struct {
 func (s *Server) chrome(r *http.Request, active, query string) chrome {
 	pages, _ := s.store.List()
 	pending, _ := s.queue.PendingCount()
+	nav := buildNav(pages, active, s.base)
+	if len(pages) > navInlineLimit {
+		nav = trimNav(nav)
+	}
 	return chrome{
-		Nav: buildNav(pages, active, s.base), Pending: pending, Query: query, Active: active,
+		Nav: nav, Pending: pending, Query: query, Active: active,
 		ReadOnly: s.readOnly, CanEdit: !s.readOnly && s.role(r) >= RoleEditor,
 		SiteTitle: s.title, Accent: s.accent, Theme: s.theme, CustomCSS: s.customCSS != "",
 		Base: s.base, Wikis: s.wikis, Logout: len(s.web.Users) > 0,
@@ -429,6 +434,59 @@ type navNode struct {
 	Children []*navNode
 	Open     bool
 	Active   bool
+	Lazy     bool // folder whose children load on expand (large wikis)
+	More     int  // count of sibling leaves omitted at this level
+}
+
+// navInlineLimit is the page count below which the whole tree is rendered into
+// the sidebar. Above it, the nav renders only the active spine and lazy-loads
+// folder children on expand, so a page view does not ship every node.
+const navInlineLimit = 1000
+
+// navPerLevel caps how many leaves a single folder renders before collapsing the
+// rest into a "+N more" hint, so a flat folder of 100k pages stays navigable.
+const navPerLevel = 150
+
+// trimNav prunes a fully built nav tree for a large wiki: folders off the active
+// path become lazy (children dropped, loaded on demand), folders on it recurse,
+// and surplus leaves at each level collapse into a More count.
+func trimNav(nodes []*navNode) []*navNode {
+	out := make([]*navNode, 0, len(nodes))
+	shown, more := 0, 0
+	for _, n := range nodes {
+		if !n.Open && !n.Active && shown >= navPerLevel {
+			more++
+			continue
+		}
+		if len(n.Children) > 0 {
+			if n.Open {
+				n.Children = trimNav(n.Children)
+			} else {
+				n.Lazy = true
+				n.Children = nil
+			}
+		}
+		out = append(out, n)
+		shown++
+	}
+	if more > 0 {
+		out = append(out, &navNode{More: more})
+	}
+	return out
+}
+
+func findNav(nodes []*navNode, path string) *navNode {
+	for _, n := range nodes {
+		if n.Path == path {
+			return n
+		}
+		if strings.HasPrefix(path, n.Path+"/") {
+			if found := findNav(n.Children, path); found != nil {
+				return found
+			}
+		}
+	}
+	return nil
 }
 
 func buildNav(metas []store.PageMeta, active, base string) []*navNode {
@@ -703,6 +761,28 @@ type oracleView struct {
 
 func (s *Server) handleOracle(w http.ResponseWriter, r *http.Request) {
 	s.exec(w, "oracle.html", oracleView{Chrome: s.chrome(r, "oracle", "")})
+}
+
+// handleNav returns the rendered sidebar children of one folder, so a large
+// wiki's nav can load a level at a time as the user expands it.
+func (s *Server) handleNav(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		http.Error(w, "missing path", http.StatusBadRequest)
+		return
+	}
+	pages, _ := s.store.List()
+	node := findNav(buildNav(pages, r.URL.Query().Get("active"), s.base), path)
+	if node == nil {
+		return
+	}
+	var buf bytes.Buffer
+	if err := s.tmpl.ExecuteTemplate(&buf, "navtree", trimNav(node.Children)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(buf.Bytes())
 }
 
 func (s *Server) handleGraphJSON(w http.ResponseWriter, r *http.Request) {

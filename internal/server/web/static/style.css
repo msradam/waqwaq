@@ -134,6 +134,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .nav-folder > summary a { color: var(--fg); text-decoration: none; }
 .nav-folder > summary a.active { color: var(--accent); }
 .nav-children { margin-left: 10px; border-left: 1px solid var(--border); padding-left: 4px; }
+.nav-more { display: block; color: var(--muted); font-size: 12px; padding: 4px 8px; }
 
 .badge {
   display: inline-block;
