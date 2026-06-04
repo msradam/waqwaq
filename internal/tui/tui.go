@@ -6,6 +6,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -34,24 +35,30 @@ func toItems(metas []store.PageMeta) []list.Item {
 }
 
 type Model struct {
-	base    kb.KnowledgeBase
-	list    list.Model
-	vp      viewport.Model
-	search  textinput.Model
-	all     []list.Item
-	cur     string
-	curBody string
-	focus   int // 0 list, 1 content
-	typing  bool
-	w, h    int
-	ready   bool
-	status  string
+	base     kb.KnowledgeBase
+	list     list.Model
+	vp       viewport.Model
+	search   textinput.Model
+	all      []list.Item
+	cur      string
+	curBody  string
+	focus    int // 0 list, 1 content
+	typing   bool
+	w, h     int
+	ready    bool
+	status   string
+	style    string // glamour style: "dark" or "light", detected once
+	renderer *glamour.TermRenderer
+	renderW  int
 }
 
 func New(base kb.KnowledgeBase) (Model, error) {
 	metas, err := base.List()
 	if err != nil {
 		return Model{}, err
+	}
+	if len(metas) == 0 {
+		return Model{}, fmt.Errorf("no markdown pages found here; waqwaq indexes .md files")
 	}
 	its := toItems(metas)
 	l := list.New(its, list.NewDefaultDelegate(), 0, 0)
@@ -175,14 +182,31 @@ func (m *Model) open(slug string) {
 	m.render(m.cur)
 }
 
-func (m *Model) render(slug string) {
+// ensureRenderer builds the Glamour renderer once per width, with a fixed style
+// chosen at startup. WithStandardStyle avoids the per-render terminal query that
+// WithAutoStyle does, which stalls inside the Bubble Tea alt-screen.
+func (m *Model) ensureRenderer() {
 	width := m.vp.Width - 2
 	if width < 20 {
 		width = 20
 	}
+	if m.renderer != nil && m.renderW == width {
+		return
+	}
+	style := m.style
+	if style == "" {
+		style = "dark"
+	}
+	if r, err := glamour.NewTermRenderer(glamour.WithStandardStyle(style), glamour.WithWordWrap(width)); err == nil {
+		m.renderer, m.renderW = r, width
+	}
+}
+
+func (m *Model) render(slug string) {
+	m.ensureRenderer()
 	out := m.curBody
-	if r, err := glamour.NewTermRenderer(glamour.WithAutoStyle(), glamour.WithWordWrap(width)); err == nil {
-		if s, rerr := r.Render(m.curBody); rerr == nil {
+	if m.renderer != nil {
+		if s, err := m.renderer.Render(m.curBody); err == nil {
 			out = s
 		}
 	}
@@ -276,6 +300,12 @@ func Run(base kb.KnowledgeBase) error {
 	m, err := New(base)
 	if err != nil {
 		return err
+	}
+	// Detect the terminal background once, before the program takes over the
+	// terminal, so the renderer never has to query it mid-frame.
+	m.style = "dark"
+	if !lipgloss.HasDarkBackground() {
+		m.style = "light"
 	}
 	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
