@@ -93,6 +93,56 @@ func TestBasenameResolution(t *testing.T) {
 	}
 }
 
+func TestLinkHygiene(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := func(slug, content string) {
+		if err := s.Write(slug, content, "", "m"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w("authoring-content", "---\ntitle: Authoring\n---\nbase page\n")
+	w("guide/setup", "---\ntitle: Setup\n---\nx\n")
+	// A page exercising every convention the real-KB tests surfaced.
+	w("index", "---\ntitle: Home\n---\n"+
+		"Obsidian: [[guide/setup]]\n"+ // normal
+		"Space fold: [[Authoring Content]]\n"+ // space -> hyphen, case
+		"Dendron/GitHub pipe: [[the label|authoring-content]]\n"+ // target on the right
+		"Image embed: ![[diagram.png]]\n"+ // embed, not a page edge
+		"Asset link: [[diagram.png]]\n"+ // asset, not broken
+		"Code example: `[[not-a-real-link]]` and\n```\n[[also-not-real]]\n```\n"+ // in code, ignored
+		"External: [[https://example.com/x]]\n"+ // url, not broken
+		"In-page anchor: [[#some-heading]]\n"+ // same-page anchor, not broken
+		"Dead: [[genuinely-missing]]\n")
+
+	h, err := s.Health()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h.Broken) != 1 || h.Broken[0].To != "genuinely-missing" {
+		t.Fatalf("broken = %+v, want exactly [genuinely-missing]", h.Broken)
+	}
+	// index should link to guide/setup and authoring-content (3 link forms, 2 distinct targets).
+	in, err := s.Backlinks("authoring-content")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(in) != 1 || in[0].Slug != "index" {
+		t.Fatalf("authoring-content backlinks = %+v, want [index]", in)
+	}
+	if _, err := s.Backlinks("guide/setup"); err != nil {
+		t.Fatal(err)
+	}
+	if canon, ok := s.ResolveLink("the label|authoring-content"); !ok || canon != "authoring-content" {
+		t.Fatalf("piped ResolveLink = %q,%v want authoring-content", canon, ok)
+	}
+	if canon, ok := s.ResolveLink("Authoring Content"); !ok || canon != "authoring-content" {
+		t.Fatalf("space-folded ResolveLink = %q,%v want authoring-content", canon, ok)
+	}
+}
+
 func TestGraphPrimitives(t *testing.T) {
 	s := seed(t)
 	nb, err := s.Neighbors("index", 1)

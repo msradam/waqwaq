@@ -2,6 +2,7 @@ package store
 
 import (
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -53,18 +54,16 @@ func (s *Store) graphData() ([]PageMeta, []GraphEdge, []BrokenLink, error) {
 			continue
 		}
 		seenTo := map[string]bool{}
-		for _, match := range wikiLinkRe.FindAllStringSubmatch(page.Body, -1) {
-			target := match[1]
-			if i := strings.IndexAny(target, "|#"); i >= 0 {
-				target = target[:i]
+		for _, lk := range wikiLinks(stripCode(page.Body)) {
+			if lk.embed {
+				continue // image/note transclusions are content, not page edges
 			}
-			target = strings.TrimSpace(target)
-			if target == "" {
-				continue
-			}
-			canon := resolver.resolve(target)
+			canon := resolveTarget(resolver, lk.target)
 			if canon == "" {
-				broken = append(broken, BrokenLink{From: m.Slug, To: target})
+				// Skip same-page anchors ([[#heading]]), assets, and external URLs.
+				if name := brokenName(lk.target); name != "" && !isAssetRef(lk.target) && !strings.Contains(lk.target, "://") {
+					broken = append(broken, BrokenLink{From: m.Slug, To: name})
+				}
 				continue
 			}
 			if canon == m.Slug || seenTo[canon] {
@@ -133,7 +132,8 @@ func (s *Store) Health() (*Health, error) {
 type linkResolver struct {
 	exact map[string]string
 	lower map[string]string
-	base  map[string]string
+	base  map[string]string // lower(basename) -> slug
+	norm  map[string]string // normalized basename/slug -> slug (space and hyphen folded)
 }
 
 func newLinkResolver(metas []PageMeta) *linkResolver {
@@ -141,14 +141,19 @@ func newLinkResolver(metas []PageMeta) *linkResolver {
 		exact: make(map[string]string, len(metas)),
 		lower: make(map[string]string, len(metas)),
 		base:  make(map[string]string, len(metas)),
+		norm:  make(map[string]string, len(metas)*2),
+	}
+	put := func(m map[string]string, key, slug string) {
+		if cur, ok := m[key]; !ok || shorterSlug(slug, cur) {
+			m[key] = slug
+		}
 	}
 	for _, m := range metas {
 		r.exact[m.Slug] = m.Slug
 		r.lower[strings.ToLower(m.Slug)] = m.Slug
-		key := strings.ToLower(baseName(m.Slug))
-		if cur, ok := r.base[key]; !ok || shorterSlug(m.Slug, cur) {
-			r.base[key] = m.Slug
-		}
+		put(r.base, strings.ToLower(baseName(m.Slug)), m.Slug)
+		put(r.norm, normalize(m.Slug), m.Slug)
+		put(r.norm, normalize(baseName(m.Slug)), m.Slug)
 	}
 	return r
 }
@@ -163,7 +168,106 @@ func (r *linkResolver) resolve(target string) string {
 	if s, ok := r.base[strings.ToLower(baseName(target))]; ok {
 		return s
 	}
+	if s, ok := r.norm[normalize(target)]; ok {
+		return s
+	}
+	if s, ok := r.norm[normalize(baseName(target))]; ok {
+		return s
+	}
 	return ""
+}
+
+// normalize folds case and treats spaces and hyphens as equivalent, so a link
+// written "Authoring Content" reaches a page filed as "authoring-content", the
+// way Obsidian and GitHub wikis slugify.
+func normalize(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return strings.ReplaceAll(s, " ", "-")
+}
+
+type wlink struct {
+	target string
+	embed  bool // preceded by !, an image or note transclusion
+}
+
+// wikiLinks returns the [[...]] references in body, flagging embeds (![[...]]).
+func wikiLinks(body string) []wlink {
+	locs := wikiLinkRe.FindAllStringSubmatchIndex(body, -1)
+	out := make([]wlink, 0, len(locs))
+	for _, loc := range locs {
+		out = append(out, wlink{
+			target: body[loc[2]:loc[3]],
+			embed:  loc[0] > 0 && body[loc[0]-1] == '!',
+		})
+	}
+	return out
+}
+
+var (
+	fenceRe   = regexp.MustCompile("(?s)```.*?```|~~~.*?~~~")
+	icodeRe   = regexp.MustCompile("`[^`\n]*`")
+	assetExts = []string{".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".pdf", ".mp4", ".mov", ".webm", ".canvas", ".base", ".excalidraw"}
+)
+
+// stripCode removes fenced and inline code so wikilink syntax shown as an
+// example in documentation is not mistaken for a real link.
+func stripCode(body string) string {
+	return icodeRe.ReplaceAllString(fenceRe.ReplaceAllString(body, ""), "")
+}
+
+// resolveTarget resolves a raw [[...]] target. It strips a #anchor, and for a
+// piped target tries both sides, so it handles Obsidian [[target|label]] and
+// Dendron/GitHub [[label|target]] alike.
+func resolveTarget(r *linkResolver, raw string) string {
+	parts := []string{raw}
+	if i := strings.Index(raw, "|"); i >= 0 {
+		parts = []string{raw[:i], raw[i+1:]}
+	}
+	for _, c := range parts {
+		if i := strings.Index(c, "#"); i >= 0 {
+			c = c[:i]
+		}
+		if c = strings.TrimSpace(c); c != "" {
+			if s := r.resolve(c); s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+// isAssetRef reports whether a target points at an image or other asset file
+// rather than a page, so a missing one is not counted as a broken page link.
+func isAssetRef(target string) bool {
+	t := target
+	if i := strings.IndexAny(t, "|#"); i >= 0 {
+		t = t[:i]
+	}
+	t = strings.ToLower(strings.TrimSpace(t))
+	for _, ext := range assetExts {
+		if strings.HasSuffix(t, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+// brokenName is the cleaned target shown in the broken-link report.
+func brokenName(raw string) string {
+	t := raw
+	if i := strings.Index(t, "|"); i >= 0 {
+		// For a piped link, the half that is not a bare label is the real target.
+		l, r := strings.TrimSpace(t[:i]), strings.TrimSpace(t[i+1:])
+		if strings.ContainsAny(r, "/.-") || !strings.Contains(r, " ") {
+			t = r
+		} else {
+			t = l
+		}
+	}
+	if i := strings.Index(t, "#"); i >= 0 {
+		t = t[:i]
+	}
+	return strings.TrimSpace(t)
 }
 
 func baseName(slug string) string {
@@ -191,14 +295,7 @@ func (s *Store) ResolveLink(target string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	if i := strings.IndexAny(target, "|#"); i >= 0 {
-		target = target[:i]
-	}
-	target = strings.TrimSpace(target)
-	if target == "" {
-		return "", false
-	}
-	canon := newLinkResolver(metas).resolve(target)
+	canon := resolveTarget(newLinkResolver(metas), target)
 	return canon, canon != ""
 }
 
