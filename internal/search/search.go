@@ -1,8 +1,5 @@
-// Package search is a SQLite FTS5 full-text index over the wiki, kept fresh by
-// rebuilding only when the store's mtime signature changes. It uses the pure-Go
-// modernc.org/sqlite driver, so there is no cgo and cross-compilation stays
-// trivial. Store also satisfies Searcher with a substring scan, which is the
-// fallback when FTS5 is unavailable.
+//go:build !zos && !nofts
+
 package search
 
 import (
@@ -16,11 +13,10 @@ import (
 	"github.com/msradam/waqwaq/internal/store"
 )
 
-// Searcher is the search backend. Both *Index and *store.Store implement it.
-type Searcher interface {
-	Search(query string) ([]store.SearchHit, error)
-}
-
+// Index is the SQLite FTS5 full-text index, kept fresh by rebuilding only when
+// the store's mtime signature changes. It is excluded on z/OS, where the
+// modernc.org/sqlite driver does not build, and the caller falls back to the
+// store's substring search.
 type Index struct {
 	st  *store.Store
 	db  *sql.DB

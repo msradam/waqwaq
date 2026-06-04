@@ -96,6 +96,16 @@ cd waqwaq
 go build -o waqwaq .
 ```
 
+### Platforms
+
+The binary is pure Go with no cgo, so it cross-compiles to any `GOOS`/`GOARCH` Go supports. Full-text search uses the pure-Go `modernc.org/sqlite` driver, which does not build on a few targets (notably z/OS on s390x, which is big-endian). On those, build with `-tags nofts` to drop the FTS index; search then falls back to a substring scan, which returns the same results without ranking. The fallback is selected automatically when `GOOS=zos`.
+
+```bash
+go build -tags nofts -o waqwaq .   # FTS-less build, runs anywhere
+```
+
+z/OS itself needs the IBM Open Enterprise SDK for Go (`GOOS=zos GOARCH=s390x`), since upstream Go has no z/OS port. With that toolchain, a normal `go build` picks the FTS-less path on its own.
+
 ## Usage
 
 Scaffold a new wiki:

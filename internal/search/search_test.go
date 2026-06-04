@@ -1,3 +1,5 @@
+//go:build !zos && !nofts
+
 package search
 
 import (
