@@ -4,3 +4,5 @@
 
 # git repo created at runtime when serving an example in place
 examples/*/.git/
+.waqwaq/tokens.json
+.waqwaq/proposals/
