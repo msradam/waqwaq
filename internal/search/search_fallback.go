@@ -22,4 +22,6 @@ func New(*store.Store) (*Index, error) {
 
 func (ix *Index) Close() error { return nil }
 
+func (ix *Index) Warm() {}
+
 func (ix *Index) Search(string) ([]store.SearchHit, error) { return nil, nil }

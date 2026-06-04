@@ -3,7 +3,11 @@
 package search
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"unicode"
@@ -13,9 +17,11 @@ import (
 	"github.com/msradam/waqwaq/internal/store"
 )
 
-// Index is the SQLite FTS5 full-text index. It refreshes only when the store's
-// mtime signature changes, and then updates only the pages that changed rather
-// than rebuilding the whole table.
+// Index is the SQLite FTS5 full-text index. It persists to the OS cache directory
+// keyed by the wiki's path, so it is built once and reused across serve and mcp
+// invocations; each refresh updates only the pages whose fingerprint changed.
+// This matters most for the per-session stdio mcp client, which would otherwise
+// rebuild the whole index on every connection.
 type Index struct {
 	st  *store.Store
 	db  *sql.DB
@@ -25,7 +31,7 @@ type Index struct {
 }
 
 func New(st *store.Store) (*Index, error) {
-	db, err := sql.Open("sqlite", ":memory:")
+	db, persisted, err := openIndexDB(st)
 	if err != nil {
 		return nil, err
 	}
@@ -33,11 +39,61 @@ func New(st *store.Store) (*Index, error) {
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxIdleTime(0)
 	db.SetConnMaxLifetime(0)
-	if _, err := db.Exec(`CREATE VIRTUAL TABLE pages USING fts5(slug, title, body, tokenize='porter unicode61')`); err != nil {
+	// WAL lets a second process read while one refreshes; busy_timeout makes a
+	// concurrent writer wait rather than error. No-ops on the in-memory fallback.
+	for _, p := range []string{`PRAGMA journal_mode=WAL`, `PRAGMA busy_timeout=5000`, `PRAGMA synchronous=NORMAL`} {
+		_, _ = db.Exec(p)
+	}
+	if _, err := db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS pages USING fts5(slug, title, body, tokenize='porter unicode61')`); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	return &Index{st: st, db: db}, nil
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS pagemeta(slug TEXT PRIMARY KEY, fp TEXT)`); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	ix := &Index{st: st, db: db, fps: map[string]string{}}
+	if persisted {
+		ix.loadFingerprints() // an existing index already holds these pages
+	}
+	return ix, nil
+}
+
+// openIndexDB opens the persistent index in the OS cache directory (a derived
+// cache, not part of the user's repo). It falls back to an in-memory database if
+// the cache directory is unavailable or the on-disk file cannot be opened, so
+// search always works even when persistence does not.
+func openIndexDB(st *store.Store) (db *sql.DB, persisted bool, err error) {
+	cache, cerr := os.UserCacheDir()
+	if cerr == nil {
+		key := sha256.Sum256([]byte(st.Root()))
+		dir := filepath.Join(cache, "waqwaq", hex.EncodeToString(key[:8]))
+		if os.MkdirAll(dir, 0o755) == nil {
+			// search-v1 in the name lets a future schema change use a fresh file.
+			if d, derr := sql.Open("sqlite", filepath.Join(dir, "search-v1.db")); derr == nil {
+				if d.Ping() == nil {
+					return d, true, nil
+				}
+				_ = d.Close()
+			}
+		}
+	}
+	d, derr := sql.Open("sqlite", ":memory:")
+	return d, false, derr
+}
+
+func (ix *Index) loadFingerprints() {
+	rows, err := ix.db.Query(`SELECT slug, fp FROM pagemeta`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var slug, fp string
+		if rows.Scan(&slug, &fp) == nil {
+			ix.fps[slug] = fp
+		}
+	}
 }
 
 func (ix *Index) Close() error { return ix.db.Close() }
@@ -105,6 +161,16 @@ func (ix *Index) refresh() error {
 		return err
 	}
 	defer ins.Close()
+	setMeta, err := tx.Prepare(`INSERT INTO pagemeta(slug, fp) VALUES(?, ?) ON CONFLICT(slug) DO UPDATE SET fp = excluded.fp`)
+	if err != nil {
+		return err
+	}
+	defer setMeta.Close()
+	delMeta, err := tx.Prepare(`DELETE FROM pagemeta WHERE slug = ?`)
+	if err != nil {
+		return err
+	}
+	defer delMeta.Close()
 	for slug, fp := range fps {
 		if ix.fps[slug] == fp {
 			continue
@@ -119,10 +185,16 @@ func (ix *Index) refresh() error {
 		if _, err := ins.Exec(slug, page.Title, page.Body); err != nil {
 			return err
 		}
+		if _, err := setMeta.Exec(slug, fp); err != nil {
+			return err
+		}
 	}
 	for slug := range ix.fps {
 		if _, ok := fps[slug]; !ok {
 			if _, err := del.Exec(slug); err != nil {
+				return err
+			}
+			if _, err := delMeta.Exec(slug); err != nil {
 				return err
 			}
 		}
