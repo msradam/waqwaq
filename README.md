@@ -10,6 +10,14 @@ Writes from agents pass through a lint step before they land. A page without a f
 
 The layout follows Andrej Karpathy's LLM wiki convention: pages under `wiki/`, raw source documents under `raw/`, and a `CLAUDE.md` schema at the root. If you point Waqwaq at a folder that has no `wiki/` subdirectory, it serves the folder itself, so an existing notes folder or Obsidian vault works without restructuring. Wikilinks resolve by basename as well as by full path, the way Obsidian and GitHub wikis do, so a vault's `[[Page]]` references link up without rewriting them.
 
+## Knowledge base formats
+
+The first-class format is the LLM wiki layout above: clean markdown with YAML frontmatter and `[[wikilinks]]`. It is what agents write back to through lint and review, and what every feature is designed around. If you are starting fresh, use it.
+
+Waqwaq also reads existing knowledge bases as a compatibility layer, so you can serve a folder you already have without converting it. Link resolution is deliberately tolerant: bare `[[wikilinks]]` resolve by basename anywhere in the tree, case and spaces and hyphens are folded, and a piped `[[a|b]]` resolves from either side. Frontmatter is read as YAML or TOML (`+++`). Image embeds (`![[image.png]]`) are served from wherever the file lives, heading-anchor links resolve, plain `[text](page)` markdown links count in the graph, and wikilink syntax shown inside code blocks is ignored. In practice this means Obsidian vaults, Quartz and Foam gardens, GitHub project wikis, Dendron vaults, and Hugo or Zola sites all serve and navigate.
+
+What it does not do: write back in another tool's conventions (agents always write clean LLM wiki markdown), or interpret format-specific models such as Logseq block references and `key:: value` properties, or Dendron's filename hierarchy as a tree. Those render as plain markdown. If a knowledge base depends on them, the native tool will serve it better; Waqwaq treats them as read-only text.
+
 ## Quickstart
 
 From zero to an AI-maintained wiki in about two minutes.

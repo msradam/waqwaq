@@ -152,7 +152,7 @@ func (m *Model) layout() {
 	bodyH := m.h - 1
 	m.list.SetSize(listW, bodyH)
 	m.vp.Width = m.w - listW - 3
-	m.vp.Height = bodyH
+	m.vp.Height = bodyH - 1 // one line for the content-pane header
 }
 
 func (m *Model) openInitial() {
@@ -279,18 +279,47 @@ func (m *Model) runSearch(q string) {
 	m.focus = 0
 }
 
-var hintStyle = lipgloss.NewStyle().Faint(true)
+var (
+	hintStyle  = lipgloss.NewStyle().Faint(true)
+	focusStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+	blurStyle  = lipgloss.NewStyle().Faint(true)
+)
+
+func paneTitle(label string, focused bool) string {
+	mark := "  "
+	style := blurStyle
+	if focused {
+		mark, style = "▌ ", focusStyle
+	}
+	return style.Render(mark + label)
+}
 
 func (m Model) View() string {
 	if !m.ready {
 		return "loading…"
 	}
-	body := lipgloss.JoinHorizontal(lipgloss.Top, m.list.View(), " │ ", m.vp.View())
+	listFocus := m.focus == 0
+	// Light up the focused pane's header; dim the other.
+	m.list.Styles.Title = focusStyle
+	if !listFocus {
+		m.list.Styles.Title = blurStyle
+	}
+	cur := m.cur
+	if cur == "" {
+		cur = "(no page open)"
+	}
+	right := paneTitle(cur, !listFocus) + "\n" + m.vp.View()
+	body := lipgloss.JoinHorizontal(lipgloss.Top, m.list.View(), "  ", right)
+
 	var footer string
 	if m.typing {
 		footer = "  search: " + m.search.View()
 	} else {
-		footer = hintStyle.Render("  ↑↓ move · enter open · tab focus · / filter · s search · r related · a all · q quit")
+		where := "list"
+		if !listFocus {
+			where = "content"
+		}
+		footer = hintStyle.Render("  [" + where + "]  ↑↓ move · enter open · tab focus · / filter · s search · r related · a all · q quit")
 	}
 	return body + "\n" + footer
 }
