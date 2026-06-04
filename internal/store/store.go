@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"gopkg.in/yaml.v3"
+	"github.com/adrg/frontmatter"
 )
 
 const (
@@ -444,84 +444,17 @@ func (s *Store) LastTouched(slug string) (*Attribution, bool) {
 }
 
 // SplitFrontmatter separates a leading frontmatter block from the markdown body
-// and returns its fields. It handles YAML (--- ... ---) and, for Hugo/Zola and
-// org-export vaults, TOML (+++ ... +++). It returns a nil map when there is no
-// frontmatter.
+// and returns its fields. It reads YAML (--- ... ---), TOML (+++ ... +++), and
+// JSON, so Hugo, Zola, and org-export vaults parse alongside the native YAML. It
+// returns a nil map when there is no frontmatter.
 func SplitFrontmatter(raw string) (map[string]any, string) {
 	norm := strings.ReplaceAll(raw, "\r\n", "\n")
-	if fm, body, ok := splitFenced(norm, "---"); ok {
-		var m map[string]any
-		if err := yaml.Unmarshal([]byte(fm), &m); err != nil {
-			return nil, raw
-		}
-		return m, body
+	var fm map[string]any
+	rest, err := frontmatter.Parse(strings.NewReader(norm), &fm)
+	if err != nil || len(fm) == 0 {
+		return nil, raw
 	}
-	if fm, body, ok := splitFenced(norm, "+++"); ok {
-		return parseTOMLLite(fm), body
-	}
-	return nil, raw
-}
-
-// splitFenced returns the text between a leading fence line (e.g. --- or +++)
-// and the next line that is exactly the same fence, plus the remaining body.
-func splitFenced(norm, fence string) (string, string, bool) {
-	open := fence + "\n"
-	if !strings.HasPrefix(norm, open) {
-		return "", "", false
-	}
-	rest := norm[len(open):]
-	for i := 0; i < len(rest); {
-		nl := strings.IndexByte(rest[i:], '\n')
-		lineEnd := len(rest)
-		if nl >= 0 {
-			lineEnd = i + nl
-		}
-		if rest[i:lineEnd] == fence {
-			if nl < 0 {
-				return rest[:i], "", true
-			}
-			return rest[:i], strings.TrimPrefix(rest[lineEnd+1:], "\n"), true
-		}
-		if nl < 0 {
-			break
-		}
-		i = lineEnd + 1
-	}
-	return "", "", false
-}
-
-// parseTOMLLite reads the common subset of TOML frontmatter (key = "string" and
-// key = ["a", "b"] arrays) without a TOML dependency. It is enough to recover a
-// page's title and tags from a Hugo/Zola vault; richer TOML is ignored.
-func parseTOMLLite(s string) map[string]any {
-	m := map[string]any{}
-	for _, line := range strings.Split(s, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		eq := strings.IndexByte(line, '=')
-		if eq < 0 {
-			continue
-		}
-		key := strings.TrimSpace(line[:eq])
-		val := strings.TrimSpace(line[eq+1:])
-		if strings.HasPrefix(val, "[") && strings.HasSuffix(val, "]") {
-			var arr []any
-			for _, part := range strings.Split(strings.Trim(val, "[]"), ",") {
-				if part = strings.Trim(strings.TrimSpace(part), `"'`); part != "" {
-					arr = append(arr, part)
-				}
-			}
-			m[key] = arr
-		} else {
-			m[key] = strings.Trim(val, `"'`)
-		}
-	}
-	if len(m) == 0 {
-		return nil
-	}
-	return m
+	return fm, strings.TrimPrefix(string(rest), "\n")
 }
 
 func snippet(body, needle string) string {
