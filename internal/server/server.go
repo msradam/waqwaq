@@ -491,6 +491,7 @@ func findNav(nodes []*navNode, path string) *navNode {
 
 func buildNav(metas []store.PageMeta, active, base string) []*navNode {
 	root := &navNode{}
+	byPath := make(map[string]*navNode, len(metas)) // O(1) child lookup; a linear scan is O(n^2) on a flat wiki
 	for _, m := range metas {
 		cur := root
 		path := ""
@@ -501,10 +502,11 @@ func buildNav(metas []store.PageMeta, active, base string) []*navNode {
 			} else {
 				path += "/" + part
 			}
-			child := childByName(cur, part)
+			child := byPath[path]
 			if child == nil {
 				child = &navNode{Name: part, Path: path, Base: base}
 				cur.Children = append(cur.Children, child)
+				byPath[path] = child
 			}
 			if i == len(parts)-1 {
 				child.Slug = m.Slug
@@ -515,15 +517,6 @@ func buildNav(metas []store.PageMeta, active, base string) []*navNode {
 	}
 	markNav(root.Children, active)
 	return root.Children
-}
-
-func childByName(parent *navNode, name string) *navNode {
-	for _, c := range parent.Children {
-		if c.Name == name {
-			return c
-		}
-	}
-	return nil
 }
 
 func markNav(nodes []*navNode, active string) {
@@ -809,6 +802,7 @@ type tagsView struct {
 	Tag    string
 	Tags   []tagCount
 	Pages  []store.PageMeta
+	More   int
 }
 
 func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
@@ -818,7 +812,11 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if tag := strings.TrimPrefix(r.URL.Path, "/tags/"); tag != "" && tag != r.URL.Path {
-		s.exec(w, "tags.html", tagsView{Chrome: s.chrome(r, "tags", ""), Tag: tag, Pages: all[tag]})
+		pages, more := all[tag], 0
+		if len(pages) > 500 {
+			more, pages = len(pages)-500, pages[:500]
+		}
+		s.exec(w, "tags.html", tagsView{Chrome: s.chrome(r, "tags", ""), Tag: tag, Pages: pages, More: more})
 		return
 	}
 	names := make([]string, 0, len(all))

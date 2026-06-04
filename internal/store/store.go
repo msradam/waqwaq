@@ -47,6 +47,9 @@ type Store struct {
 	listSig   string
 	listMetas []PageMeta
 
+	titleMu    sync.Mutex // guards the per-page title cache, reused across list rebuilds
+	titleCache map[string]titleEntry
+
 	graphMu     sync.Mutex // guards the link-graph cache below
 	graphSig    string
 	graphMetas  []PageMeta
@@ -218,7 +221,20 @@ func (s *Store) List() ([]PageMeta, error) {
 	return metas, nil
 }
 
+// titleEntry caches a page's derived title against its content fingerprint, so a
+// list rebuild re-reads only the titles of pages that changed.
+type titleEntry struct {
+	fp    string
+	title string
+}
+
 func (s *Store) listUncached() ([]PageMeta, error) {
+	s.titleMu.Lock()
+	defer s.titleMu.Unlock()
+	if s.titleCache == nil {
+		s.titleCache = make(map[string]titleEntry)
+	}
+	seen := make(map[string]bool)
 	var metas []PageMeta
 	err := filepath.WalkDir(s.pages, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -235,11 +251,28 @@ func (s *Store) listUncached() ([]PageMeta, error) {
 		}
 		rel, _ := filepath.Rel(s.pages, path)
 		slug := strings.TrimSuffix(filepath.ToSlash(rel), ".md")
-		metas = append(metas, PageMeta{Slug: slug, Title: s.titleOf(path, slug)})
+		fp := ""
+		if info, err := d.Info(); err == nil {
+			fp = fmt.Sprintf("%d|%d", info.ModTime().UnixNano(), info.Size())
+		}
+		seen[slug] = true
+		title := ""
+		if te, ok := s.titleCache[slug]; ok && fp != "" && te.fp == fp {
+			title = te.title
+		} else {
+			title = s.titleOf(path, slug)
+			s.titleCache[slug] = titleEntry{fp: fp, title: title}
+		}
+		metas = append(metas, PageMeta{Slug: slug, Title: title})
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	for slug := range s.titleCache {
+		if !seen[slug] {
+			delete(s.titleCache, slug)
+		}
 	}
 	sort.Slice(metas, func(i, j int) bool { return metas[i].Slug < metas[j].Slug })
 	return metas, nil

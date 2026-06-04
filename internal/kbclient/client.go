@@ -77,7 +77,7 @@ func (c *Client) List() ([]store.PageMeta, error) {
 	var r struct {
 		Pages []ref `json:"pages"`
 	}
-	if err := c.get("/api/pages", &r); err != nil {
+	if err := c.get("/api/pages?limit=0", &r); err != nil { // 0 returns all pages, not the default first page
 		return nil, err
 	}
 	return metas(r.Pages), nil

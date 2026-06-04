@@ -111,10 +111,16 @@ func (s *Server) apiNeighbors(w http.ResponseWriter, r *http.Request) {
 	if depth < 1 {
 		depth = 1
 	}
+	if depth > 3 {
+		depth = 3 // each hop widens toward the whole graph; bound it
+	}
 	nb, err := s.store.Neighbors(r.PathValue("slug"), depth)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if len(nb) > 200 { // Neighbors is nearest-first, so this keeps the closest
+		nb = nb[:200]
 	}
 	writeJSON(w, map[string]any{"neighbors": nb})
 }
@@ -157,6 +163,9 @@ func (s *Server) apiBacklinks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if len(metas) > 500 {
+		metas = metas[:500]
+	}
 	writeJSON(w, map[string]any{"pages": refs(metas)})
 }
 
@@ -168,6 +177,9 @@ func (s *Server) apiTags(w http.ResponseWriter, _ *http.Request) {
 	}
 	out := make(map[string][]apiRef, len(tags))
 	for tag, metas := range tags {
+		if len(metas) > 200 {
+			metas = metas[:200]
+		}
 		out[tag] = refs(metas)
 	}
 	writeJSON(w, map[string]any{"tags": out})

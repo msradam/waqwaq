@@ -475,6 +475,7 @@ func cmdMCP(args []string) {
 	if err != nil {
 		log.Fatalf("mcp: %v", err)
 	}
+	go st.Warm()
 	cfg, _ := config.Load(filepath.Join(st.Root(), ".waqwaq", "config.json"))
 	reg, err := auth.Load(filepath.Join(st.Root(), ".waqwaq", "tokens.json"))
 	if err != nil {
@@ -488,6 +489,7 @@ func cmdMCP(args []string) {
 	if idx, err := search.New(st); err == nil {
 		searcher = idx
 		defer func() { _ = idx.Close() }()
+		go idx.Warm()
 	}
 	srv := mcpserver.New(st, q, reg, mcpserver.Options{
 		ReadOnly: *readOnly, ForceReview: *forceReview || cfg.Review, Rules: cfg.Lint, Search: searcher,
