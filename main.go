@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
@@ -57,6 +58,8 @@ func main() {
 		cmdExport(os.Args[2:])
 	case "scan":
 		cmdScan(os.Args[2:])
+	case "doctor":
+		cmdDoctor(os.Args[2:])
 	case "mcp":
 		cmdMCP(os.Args[2:])
 	case "toc":
@@ -87,6 +90,7 @@ usage:
   waqwaq ingest <dir> <file>...       add raw documents to the wiki's raw/ area
   waqwaq export <dir> <outdir>        render the wiki to a static HTML site
   waqwaq scan   <repo> <outdir>       generate a wiki from a Go module's import graph
+  waqwaq doctor [dir]                 check a wiki's setup, MCP access, and health
   waqwaq mcp    [dir]                 serve MCP over stdio (for an agent subprocess)
   waqwaq toc    [dir]                 list pages as slug<tab>title (greppable)
   waqwaq grep   <query> [dir]         full-text search; --tag, --links-to scope it
@@ -530,6 +534,134 @@ func printJSON(v any) {
 func remoteFlags(fs *flag.FlagSet) (*string, *string) {
 	return fs.String("remote", os.Getenv("WAQWAQ_REMOTE"), "query a remote waqwaq server URL instead of a local dir"),
 		fs.String("token", os.Getenv("WAQWAQ_TOKEN"), "bearer token for --remote")
+}
+
+type diag struct {
+	level string // ok, warn, fail, info
+	label string
+	msg   string
+}
+
+// cmdDoctor inspects a wiki's setup, MCP/access posture, and content health, and
+// exits non-zero if it finds a problem. It is the "is this wired up right" check,
+// distinct from content linting.
+func cmdDoctor(args []string) {
+	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
+	rest := parseArgs(fs, args)
+	dir := "."
+	if len(rest) > 0 {
+		dir = rest[0]
+	}
+	if reportDiags(runDoctor(dir)) > 0 {
+		os.Exit(1)
+	}
+}
+
+func runDoctor(dir string) []diag {
+	var out []diag
+	add := func(level, label, msg string) { out = append(out, diag{level, label, msg}) }
+
+	if p, err := exec.LookPath("git"); err == nil {
+		add("ok", "git", "found at "+p)
+	} else {
+		add("fail", "git", "not on PATH; history, attribution, and review need git")
+	}
+
+	st, err := store.New(dir)
+	if err != nil {
+		return append(out, diag{"fail", "wiki", err.Error()})
+	}
+	root := st.Root()
+
+	metas, _ := st.List()
+	mode := "vault mode (serving the folder itself)"
+	if fi, e := os.Stat(filepath.Join(root, "wiki")); e == nil && fi.IsDir() {
+		mode = "serving wiki/"
+	}
+	if len(metas) == 0 {
+		add("warn", "pages", "no markdown pages found; Waqwaq indexes .md files")
+	} else {
+		add("ok", "pages", fmt.Sprintf("%d markdown pages, %s", len(metas), mode))
+	}
+
+	if st.Instructions() != "" {
+		add("ok", "schema", "CLAUDE.md present; agents receive it as MCP instructions")
+	} else {
+		add("warn", "schema", "no CLAUDE.md; agents connect without a wiki schema")
+	}
+
+	var cfg config.Config
+	cfgPath := filepath.Join(root, ".waqwaq", "config.json")
+	if _, e := os.Stat(cfgPath); os.IsNotExist(e) {
+		add("ok", "config", "no config.json; using defaults")
+	} else if c, e := config.Load(cfgPath); e != nil {
+		add("fail", "config", "config.json is invalid: "+e.Error())
+	} else {
+		cfg = c
+		add("ok", "config", "config.json is valid")
+	}
+
+	if idx, e := search.New(st); e == nil {
+		_ = idx.Close()
+		add("ok", "search", "full-text search (SQLite FTS5)")
+	} else {
+		add("warn", "search", "substring search (the FTS5 index is not in this build)")
+	}
+
+	reg, tokErr := auth.Load(filepath.Join(root, ".waqwaq", "tokens.json"))
+	mcpTokened := tokErr == nil && reg.Enabled()
+	switch {
+	case tokErr != nil:
+		add("fail", "mcp", "tokens.json is invalid: "+tokErr.Error())
+	case mcpTokened:
+		add("ok", "mcp", "the MCP endpoint requires a bearer token")
+	default:
+		add("warn", "mcp", "the MCP endpoint is open; any caller that reaches the port can read and write the wiki")
+	}
+
+	webAuth := false
+	switch {
+	case cfg.Web.ProxyHeader != "":
+		add("info", "web", "identity from proxy header "+cfg.Web.ProxyHeader)
+		webAuth = true
+	case len(cfg.Web.Users) > 0:
+		add("info", "web", fmt.Sprintf("built-in login (%d user(s))", len(cfg.Web.Users)))
+		webAuth = true
+	default:
+		add("info", "web", "open; trusts local access on a loopback bind")
+	}
+	if webAuth && !mcpTokened {
+		add("fail", "posture", "the web UI requires login but the MCP endpoint is open; add .waqwaq/tokens.json")
+	}
+
+	if h, e := st.Health(); e == nil {
+		if n := len(h.Broken); n > 0 {
+			add("warn", "links", fmt.Sprintf("%d broken link(s) (see the Canopy, or waqwaq health tools)", n))
+		} else {
+			add("ok", "links", "no broken links")
+		}
+		add("info", "orphans", fmt.Sprintf("%d page(s) nothing links to", len(h.Orphans)))
+		if n := len(h.Stale); n > 0 {
+			add("info", "stale", fmt.Sprintf("%d page(s) untouched 90+ days", n))
+		}
+	}
+	return out
+}
+
+func reportDiags(out []diag) int {
+	sym := map[string]string{"ok": "✓", "warn": "⚠", "fail": "✗", "info": "·"}
+	warns, fails := 0, 0
+	for _, d := range out {
+		fmt.Printf("  %s %-9s %s\n", sym[d.level], d.label, d.msg)
+		switch d.level {
+		case "warn":
+			warns++
+		case "fail":
+			fails++
+		}
+	}
+	fmt.Printf("\n%d problem(s), %d warning(s)\n", fails, warns)
+	return fails
 }
 
 func cmdScan(args []string) {

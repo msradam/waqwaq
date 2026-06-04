@@ -286,6 +286,8 @@ To require authentication, set `web.proxy_header` to the header your reverse pro
 
 Without a reverse proxy, set `web.users` instead: a list of `{ "name", "password", "role" }` where `password` is a bcrypt hash from `waqwaq passwd`. The server then serves a login form and tracks a signed session cookie. The same `viewer`/`editor`/`admin` roles apply.
 
+`waqwaq doctor [dir]` reports a wiki's setup and access posture before you serve it: whether git is available, the search backend in use, whether the MCP endpoint is token-gated or open, and broken-link or schema problems. It exits non-zero on a real problem, for example a web UI behind login while the MCP endpoint is left open.
+
 ### Appearance and tuning
 
 Optional settings live in `<dir>/.waqwaq/config.json`. Every field is optional, and a missing file uses defaults.
