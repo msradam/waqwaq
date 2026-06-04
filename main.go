@@ -75,7 +75,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, `waqwaq is a git-backed markdown wiki that humans browse and AI agents read and write.
 
 usage:
-  waqwaq init   [dir]                 scaffold a new wiki (wiki/ + raw/ + CLAUDE.md)
+  waqwaq init   <dir>                 scaffold a new wiki (wiki/ + raw/ + CLAUDE.md)
   waqwaq serve  [dir] [--addr] [--read-only] [--review] [--tokens FILE]
                                       serve web UI + MCP over one port
   waqwaq ingest <dir> <file>...       add raw documents to the wiki's raw/ area
@@ -282,10 +282,10 @@ const farmLandingHTML = `<!doctype html>
 func cmdInit(args []string) {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	rest := parseArgs(fs, args)
-	dir := "."
-	if len(rest) > 0 {
-		dir = rest[0]
+	if len(rest) == 0 {
+		log.Fatal("usage: waqwaq init <dir>\nrefusing to scaffold into the current directory; pass an explicit path")
 	}
+	dir := rest[0]
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		log.Fatalf("init: %v", err)
