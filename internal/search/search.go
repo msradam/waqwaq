@@ -66,7 +66,14 @@ func New(st *store.Store) (*Index, error) {
 func openIndexDB(st *store.Store) (db *sql.DB, persisted bool, err error) {
 	cache, cerr := os.UserCacheDir()
 	if cerr == nil {
-		key := sha256.Sum256([]byte(st.Root()))
+		// Resolve symlinks so every path form of the same physical wiki keys one
+		// index (notably /tmp vs /private/tmp on macOS), letting serve and mcp
+		// share the cache regardless of how the directory was named.
+		root := st.Root()
+		if resolved, rerr := filepath.EvalSymlinks(root); rerr == nil {
+			root = resolved
+		}
+		key := sha256.Sum256([]byte(root))
 		dir := filepath.Join(cache, "waqwaq", hex.EncodeToString(key[:8]))
 		if os.MkdirAll(dir, 0o755) == nil {
 			// search-v1 in the name lets a future schema change use a fresh file.
