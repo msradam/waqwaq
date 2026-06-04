@@ -20,10 +20,10 @@
     {{else}}
       <article class="markdown">{{.Content}}</article>
       {{if .Tags}}<div class="tags">{{range .Tags}}<a class="tag" href="{{$.Chrome.Base}}/tags/{{.}}">🍃 {{.}}</a>{{end}}</div>{{end}}
-      {{if .Backlinks}}
-      <section class="backlinks">
+      {{if .Slug}}
+      <section class="backlinks" data-backlinks="{{.Slug}}" hidden>
         <h2>Referenced by</h2>
-        <ul>{{range .Backlinks}}<li><a href="{{$.Chrome.Base}}/wiki/{{.Slug}}">{{.Title}}</a></li>{{end}}</ul>
+        <ul></ul>
       </section>
       {{end}}
       {{if .Slug}}
@@ -45,6 +45,26 @@
 <script type="module">
   import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
   mermaid.initialize({ startOnLoad: true, theme: 'neutral' });
+</script>
+<script>
+(function(){
+  var sec = document.querySelector('.backlinks[data-backlinks]');
+  if (!sec) return;
+  var bar = document.querySelector('.sidebar');
+  var base = (bar && bar.dataset.base) || '';
+  var slug = sec.getAttribute('data-backlinks');
+  fetch(base + '/api/backlinks/' + slug.split('/').map(encodeURIComponent).join('/'))
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      var pages = (d && d.pages) || [];
+      if (!pages.length) return;
+      var esc = function(s){ return String(s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
+      sec.querySelector('ul').innerHTML = pages.map(function(p){
+        return '<li><a href="' + base + '/wiki/' + p.slug.split('/').map(encodeURIComponent).join('/') + '">' + esc(p.title || p.slug) + '</a></li>';
+      }).join('');
+      sec.hidden = false;
+    }).catch(function(){});
+})();
 </script>
 </body>
 </html>{{end}}

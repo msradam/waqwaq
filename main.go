@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -834,18 +835,16 @@ func cmdGrep(args []string) {
 	if err != nil {
 		log.Fatalf("grep: %v", err)
 	}
-	hits, err := base.Search(rest[0])
-	if err != nil {
-		log.Fatalf("grep: %v", err)
-	}
+	// With a --tag/--links-to scope, search within that set directly. Filtering
+	// the capped search hits would drop matches that ranked past the cap.
+	var hits []store.SearchHit
 	if scope := scopeSet(base, *tag, *linksTo); scope != nil {
-		kept := hits[:0]
-		for _, h := range hits {
-			if scope[h.Slug] {
-				kept = append(kept, h)
-			}
+		hits = grepScoped(base, scope, rest[0])
+	} else {
+		hits, err = base.Search(rest[0])
+		if err != nil {
+			log.Fatalf("grep: %v", err)
 		}
-		hits = kept
 	}
 	if *asJSON {
 		printJSON(hits)
@@ -897,6 +896,54 @@ func slugsOf(metas []store.PageMeta) []string {
 		out[i] = m.Slug
 	}
 	return out
+}
+
+// grepScoped searches within an explicit slug set (from --tag/--links-to) by
+// reading each page, so the result is complete rather than limited to the first
+// page of full-text hits.
+func grepScoped(base kb.KnowledgeBase, scope map[string]bool, query string) []store.SearchHit {
+	needle := strings.ToLower(strings.TrimSpace(query))
+	slugs := make([]string, 0, len(scope))
+	for s := range scope {
+		slugs = append(slugs, s)
+	}
+	sort.Strings(slugs)
+	var hits []store.SearchHit
+	for _, slug := range slugs {
+		page, err := base.Read(slug)
+		if err != nil || page == nil {
+			continue
+		}
+		if needle == "" {
+			hits = append(hits, store.SearchHit{Slug: slug, Title: page.Title})
+			continue
+		}
+		if !strings.Contains(strings.ToLower(page.Title+"\n"+page.Body), needle) {
+			continue
+		}
+		hits = append(hits, store.SearchHit{Slug: slug, Title: page.Title, Snippet: grepSnippet(page.Body, needle)})
+	}
+	return hits
+}
+
+func grepSnippet(body, needle string) string {
+	i := strings.Index(strings.ToLower(body), needle)
+	if i < 0 {
+		line := body
+		if nl := strings.IndexByte(line, '\n'); nl >= 0 {
+			line = line[:nl]
+		}
+		return strings.TrimSpace(line)
+	}
+	start := i - 30
+	if start < 0 {
+		start = 0
+	}
+	end := i + len(needle) + 30
+	if end > len(body) {
+		end = len(body)
+	}
+	return strings.TrimSpace(strings.ReplaceAll(body[start:end], "\n", " "))
 }
 
 func cmdCat(args []string) {

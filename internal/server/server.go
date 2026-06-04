@@ -585,7 +585,6 @@ type pageView struct {
 	Slug        string
 	TOC         []render.TOCEntry
 	Tags        []string
-	Backlinks   []store.PageMeta
 	Attribution *attributionView
 	IsSearch    bool
 	Query       string
@@ -662,10 +661,11 @@ func (s *Server) renderPage(w http.ResponseWriter, r *http.Request, page *store.
 			Stale: !a.When.IsZero() && time.Since(a.When) > 90*24*time.Hour,
 		}
 	}
-	backlinks, _ := s.store.Backlinks(page.Slug)
+	// Backlinks are loaded by the page via /api/backlinks after first paint, so a
+	// page render never blocks on building the link graph.
 	s.exec(w, "page.html", pageView{
 		Chrome: s.chrome(r, page.Slug, ""), Title: page.Title, Content: html, Slug: page.Slug,
-		TOC: toc, Tags: store.FrontmatterTags(page.Frontmatter), Backlinks: backlinks, Attribution: attr,
+		TOC: toc, Tags: store.FrontmatterTags(page.Frontmatter), Attribution: attr,
 	})
 }
 
