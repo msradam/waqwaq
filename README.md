@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="noun-tree-8262937.png" alt="" width="84">
+</p>
+
 # Waqwaq
 
 A git-backed markdown wiki that humans browse and AI agents read and write, from one binary over one port.
@@ -110,3 +114,5 @@ Developed with AI assistance.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+The tree icon is by JK KIM from the [Noun Project](https://thenounproject.com).
