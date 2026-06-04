@@ -303,6 +303,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/proposals/", s.handleProposal)
 	mux.HandleFunc("/proposals", s.handleProposals)
 	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/oracle", s.handleOracle)
+	mux.HandleFunc("/graph.json", s.handleGraphJSON)
 	mux.HandleFunc("/tags/", s.handleTags)
 	mux.HandleFunc("/tags", s.handleTags)
 	mux.HandleFunc("/history/", s.handleHistory)
@@ -649,6 +651,24 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	recent, _ := s.store.Recent(15)
 	s.exec(w, "health.html", healthView{Chrome: s.chrome(r, "health", ""), Health: h, Recent: recent})
+}
+
+type oracleView struct {
+	Chrome chrome
+}
+
+func (s *Server) handleOracle(w http.ResponseWriter, r *http.Request) {
+	s.exec(w, "oracle.html", oracleView{Chrome: s.chrome(r, "oracle", "")})
+}
+
+func (s *Server) handleGraphJSON(w http.ResponseWriter, r *http.Request) {
+	g, err := s.store.GraphView()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(g)
 }
 
 type tagCount struct {

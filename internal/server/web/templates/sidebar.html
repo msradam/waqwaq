@@ -21,6 +21,7 @@
   </form>
   <a class="nav-link section{{if eq .Active "proposals"}} active{{end}}" href="{{.Base}}/proposals">Proposals{{if .Pending}} <span class="badge">{{.Pending}}</span>{{end}}</a>
   <a class="nav-link section{{if eq .Active "health"}} active{{end}}" href="{{.Base}}/health">Canopy</a>
+  <a class="nav-link section{{if eq .Active "oracle"}} active{{end}}" href="{{.Base}}/oracle">Oracle</a>
   <a class="nav-link section{{if eq .Active "tags"}} active{{end}}" href="{{.Base}}/tags">Tags</a>
   {{if .CanEdit}}<a class="nav-link section" href="{{.Base}}/edit/">+ New page</a>{{end}}
   {{if .Logout}}<a class="nav-link section" href="{{.Base}}/logout">Sign out</a>{{end}}

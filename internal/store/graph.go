@@ -202,6 +202,179 @@ func (s *Store) ResolveLink(target string) (string, bool) {
 	return canon, canon != ""
 }
 
+type Neighbor struct {
+	Slug     string `json:"slug"`
+	Title    string `json:"title"`
+	Distance int    `json:"distance"`
+}
+
+type Hub struct {
+	Slug   string `json:"slug"`
+	Title  string `json:"title"`
+	Degree int    `json:"degree"`
+}
+
+type GraphNode struct {
+	Slug   string `json:"slug"`
+	Title  string `json:"title"`
+	Degree int    `json:"degree"`
+}
+
+type GraphView struct {
+	Nodes []GraphNode `json:"nodes"`
+	Edges []GraphEdge `json:"edges"`
+}
+
+// adjacency returns the page list, a slug->title map, and an undirected
+// adjacency map over resolved links. Links are treated as bidirectional for
+// navigation: if A references B, the two are neighbors either way.
+func (s *Store) adjacency() ([]PageMeta, map[string]string, map[string][]string, error) {
+	metas, edges, _, err := s.graphData()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	title := make(map[string]string, len(metas))
+	for _, m := range metas {
+		title[m.Slug] = m.Title
+	}
+	adj := make(map[string][]string, len(metas))
+	seen := make(map[string]bool, len(edges)*2)
+	link := func(a, b string) {
+		k := a + "\x00" + b
+		if seen[k] {
+			return
+		}
+		seen[k] = true
+		adj[a] = append(adj[a], b)
+	}
+	for _, e := range edges {
+		link(e.From, e.To)
+		link(e.To, e.From)
+	}
+	return metas, title, adj, nil
+}
+
+// Neighbors returns the pages reachable from slug within depth hops over the
+// undirected link graph, nearest first, excluding the page itself.
+func (s *Store) Neighbors(slug string, depth int) ([]Neighbor, error) {
+	if depth < 1 {
+		depth = 1
+	}
+	_, title, adj, err := s.adjacency()
+	if err != nil {
+		return nil, err
+	}
+	dist := map[string]int{slug: 0}
+	queue := []string{slug}
+	var out []Neighbor
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if dist[cur] >= depth {
+			continue
+		}
+		for _, nb := range adj[cur] {
+			if _, ok := dist[nb]; ok {
+				continue
+			}
+			dist[nb] = dist[cur] + 1
+			out = append(out, Neighbor{Slug: nb, Title: title[nb], Distance: dist[nb]})
+			queue = append(queue, nb)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Distance != out[j].Distance {
+			return out[i].Distance < out[j].Distance
+		}
+		return out[i].Slug < out[j].Slug
+	})
+	return out, nil
+}
+
+// Path returns the shortest chain of pages connecting from to to over the
+// undirected link graph, inclusive of both ends, or nil if they are not
+// connected. It is how an agent answers "how does X relate to Y".
+func (s *Store) Path(from, to string) ([]PageMeta, error) {
+	_, title, adj, err := s.adjacency()
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := title[from]; !ok {
+		return nil, nil
+	}
+	if from == to {
+		return []PageMeta{{Slug: from, Title: title[from]}}, nil
+	}
+	prev := map[string]string{from: ""}
+	queue := []string{from}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if cur == to {
+			break
+		}
+		for _, nb := range adj[cur] {
+			if _, ok := prev[nb]; ok {
+				continue
+			}
+			prev[nb] = cur
+			queue = append(queue, nb)
+		}
+	}
+	if _, ok := prev[to]; !ok {
+		return nil, nil
+	}
+	var rev []PageMeta
+	for at := to; at != ""; at = prev[at] {
+		rev = append(rev, PageMeta{Slug: at, Title: title[at]})
+	}
+	for i, j := 0, len(rev)-1; i < j; i, j = i+1, j-1 {
+		rev[i], rev[j] = rev[j], rev[i]
+	}
+	return rev, nil
+}
+
+// Hubs returns the n most-connected pages by undirected degree, the natural
+// entry points into an unfamiliar wiki.
+func (s *Store) Hubs(n int) ([]Hub, error) {
+	metas, title, adj, err := s.adjacency()
+	if err != nil {
+		return nil, err
+	}
+	hubs := make([]Hub, 0, len(metas))
+	for _, m := range metas {
+		hubs = append(hubs, Hub{Slug: m.Slug, Title: title[m.Slug], Degree: len(adj[m.Slug])})
+	}
+	sort.Slice(hubs, func(i, j int) bool {
+		if hubs[i].Degree != hubs[j].Degree {
+			return hubs[i].Degree > hubs[j].Degree
+		}
+		return hubs[i].Slug < hubs[j].Slug
+	})
+	if n > 0 && len(hubs) > n {
+		hubs = hubs[:n]
+	}
+	return hubs, nil
+}
+
+// GraphView returns the whole link graph as nodes (with degree) and edges, for
+// rendering the visual map.
+func (s *Store) GraphView() (*GraphView, error) {
+	metas, edges, _, err := s.graphData()
+	if err != nil {
+		return nil, err
+	}
+	_, title, adj, err := s.adjacency()
+	if err != nil {
+		return nil, err
+	}
+	nodes := make([]GraphNode, 0, len(metas))
+	for _, m := range metas {
+		nodes = append(nodes, GraphNode{Slug: m.Slug, Title: title[m.Slug], Degree: len(adj[m.Slug])})
+	}
+	return &GraphView{Nodes: nodes, Edges: edges}, nil
+}
+
 func (s *Store) ageDays(slug string) int {
 	p, err := s.pathFor(slug)
 	if err != nil {

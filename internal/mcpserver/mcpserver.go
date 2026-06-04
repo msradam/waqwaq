@@ -21,7 +21,8 @@ import (
 const baseInstructions = `This is a Waqwaq wiki: git-backed markdown pages that humans browse and agents maintain.
 
 Read with wiki_list, wiki_read, wiki_search, and wiki_graph (the page link graph).
-Maintain the wiki with wiki_health (orphans, broken links, stale pages), wiki_recent (recent changes), wiki_backlinks, wiki_history, and wiki_tags. Use wiki_health to find what needs fixing.
+Navigate by relationship: wiki_hubs lists the most-connected pages to read first, wiki_neighbors pulls a page's linked neighbourhood in one call, wiki_path returns the chain connecting two pages, and wiki_backlinks lists what links to a page.
+Maintain the wiki with wiki_health (orphans, broken links, stale pages), wiki_recent (recent changes), wiki_history, and wiki_tags. Use wiki_health to find what needs fixing.
 Raw documents to synthesise from live under raw/: list them with wiki_list_raw, read with wiki_read_raw, add with wiki_ingest.
 Create or replace pages with wiki_write. Each page needs YAML frontmatter with a title, and links other pages with [[slug]] or [[slug|label]] wikilinks.
 wiki_lint dry-runs the checks. A missing title blocks a write; unresolved wikilinks are warnings.
@@ -229,6 +230,71 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 			out.Pages = append(out.Pages, pageRef{Slug: m.Slug, Title: m.Title})
 		}
 		return nil, out, nil
+	})
+
+	type neighborsIn struct {
+		Slug  string `json:"slug" jsonschema:"slug of the page to start from"`
+		Depth int    `json:"depth,omitempty" jsonschema:"how many hops out to include (default 1)"`
+	}
+	type neighborsOut struct {
+		Neighbors []store.Neighbor `json:"neighbors"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "wiki_neighbors",
+		Description: "List the pages connected to a page within N hops over the link graph, nearest first. Use this to pull a page's surrounding context in one call instead of guessing related pages.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in neighborsIn) (*mcp.CallToolResult, neighborsOut, error) {
+		depth := in.Depth
+		if depth <= 0 {
+			depth = 1
+		}
+		nb, err := st.Neighbors(in.Slug, depth)
+		if err != nil {
+			return nil, neighborsOut{}, err
+		}
+		return nil, neighborsOut{Neighbors: nb}, nil
+	})
+
+	type pathIn struct {
+		From string `json:"from" jsonschema:"slug of the page to start from"`
+		To   string `json:"to" jsonschema:"slug of the page to reach"`
+	}
+	type pathOut struct {
+		Path []pageRef `json:"path"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "wiki_path",
+		Description: "Find the shortest chain of linked pages connecting two pages, inclusive of both ends, or empty if they are not connected. Use this to answer how one topic relates to another.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in pathIn) (*mcp.CallToolResult, pathOut, error) {
+		metas, err := st.Path(in.From, in.To)
+		if err != nil {
+			return nil, pathOut{}, err
+		}
+		out := pathOut{}
+		for _, m := range metas {
+			out.Path = append(out.Path, pageRef{Slug: m.Slug, Title: m.Title})
+		}
+		return nil, out, nil
+	})
+
+	type hubsIn struct {
+		Limit int `json:"limit,omitempty" jsonschema:"maximum number of pages to return (default 10)"`
+	}
+	type hubsOut struct {
+		Hubs []store.Hub `json:"hubs"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "wiki_hubs",
+		Description: "List the most-connected pages by number of links, the natural entry points into an unfamiliar wiki. Read these first to orient.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in hubsIn) (*mcp.CallToolResult, hubsOut, error) {
+		limit := in.Limit
+		if limit <= 0 {
+			limit = 10
+		}
+		hubs, err := st.Hubs(limit)
+		if err != nil {
+			return nil, hubsOut{}, err
+		}
+		return nil, hubsOut{Hubs: hubs}, nil
 	})
 
 	type healthOut struct {

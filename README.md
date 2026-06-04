@@ -8,7 +8,7 @@ Waqwaq serves a directory of markdown files two ways at once. People get a web U
 
 Writes from agents pass through a lint step before they land. A page without a frontmatter title is rejected, and links that point at missing pages are flagged. Each accepted write is committed to git with the author recorded, so you can see which agent or person last touched a page.
 
-The layout follows Andrej Karpathy's LLM wiki convention: pages under `wiki/`, raw source documents under `raw/`, and a `CLAUDE.md` schema at the root. If you point Waqwaq at a folder that has no `wiki/` subdirectory, it serves the folder itself, so an existing notes folder or Obsidian vault works without restructuring.
+The layout follows Andrej Karpathy's LLM wiki convention: pages under `wiki/`, raw source documents under `raw/`, and a `CLAUDE.md` schema at the root. If you point Waqwaq at a folder that has no `wiki/` subdirectory, it serves the folder itself, so an existing notes folder or Obsidian vault works without restructuring. Wikilinks resolve by basename as well as by full path, the way Obsidian and GitHub wikis do, so a vault's `[[Page]]` references link up without rewriting them.
 
 ## Quickstart
 
@@ -130,7 +130,8 @@ The MCP endpoint speaks streamable HTTP. To use it from Claude Code, add a proje
 The server exposes these tools:
 
 - `wiki_list`, `wiki_read`, `wiki_search`, `wiki_graph` read the wiki.
-- `wiki_health`, `wiki_recent`, `wiki_backlinks`, `wiki_history`, `wiki_tags` find what needs attention and navigate the wiki. Ask the agent to "fix the broken links" or "update the stalest runbooks" and it can use `wiki_health` to find them.
+- `wiki_hubs`, `wiki_neighbors`, `wiki_path`, `wiki_backlinks` navigate by relationship: the most-connected pages to start from, a page's linked neighborhood, the chain connecting two pages, and what links to a page. An agent can pull related context by following links instead of guessing.
+- `wiki_health`, `wiki_recent`, `wiki_history`, `wiki_tags` find what needs attention. Ask the agent to "fix the broken links" or "update the stalest runbooks" and it can use `wiki_health` to find them.
 - `wiki_list_raw`, `wiki_read_raw`, `wiki_ingest` work with raw documents under `raw/`.
 - `wiki_list_proposals` lists the review queue.
 - `wiki_lint` dry-runs the write checks.
@@ -181,7 +182,7 @@ Layout:
 - Raw documents live in `<dir>/raw`.
 - `<dir>/CLAUDE.md`, if present, is sent to MCP clients as the server instructions, so an agent reads the wiki's schema before it writes.
 
-Pages are markdown with optional YAML frontmatter. A `title` field sets the page title; without one, the first heading or the file name is used. Link between pages with `[[slug]]` or `[[slug|label]]` wikilinks. Fenced `mermaid` blocks render as diagrams, fenced code blocks are syntax highlighted, and `> [!NOTE]` or `> [!WARNING]` blockquotes render as callouts (the GitHub and Obsidian convention). Headings get anchor links and a right-rail table of contents, the sidebar groups pages into a collapsible tree, and each page footer shows who last touched it (including the proposer and approver for reviewed writes) with a link to its git history. Each page also lists the pages that reference it and its frontmatter `tags`, which are browsable at `/tags`. The `/health` view (the "Canopy") surfaces orphan pages, broken links, stale pages, and recent changes, the same data the `wiki_health` tool gives an agent.
+Pages are markdown with optional YAML frontmatter. A `title` field sets the page title; without one, the first heading or the file name is used. Link between pages with `[[slug]]` or `[[slug|label]]` wikilinks. Fenced `mermaid` blocks render as diagrams, fenced code blocks are syntax highlighted, and `> [!NOTE]` or `> [!WARNING]` blockquotes render as callouts (the GitHub and Obsidian convention). Headings get anchor links and a right-rail table of contents, the sidebar groups pages into a collapsible tree, and each page footer shows who last touched it (including the proposer and approver for reviewed writes) with a link to its git history. Each page also lists the pages that reference it and its frontmatter `tags`, which are browsable at `/tags`. The `/health` view (the "Canopy") surfaces orphan pages, broken links, stale pages, and recent changes, the same data the `wiki_health` tool gives an agent. The `/oracle` view (the "Oracle Tree") draws the whole wiki as a force-directed graph where a leaf's size tracks how connected its page is; hover a leaf to trace what it links to, click to open it.
 
 ### Review and access control
 

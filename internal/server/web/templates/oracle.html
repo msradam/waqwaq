@@ -1,0 +1,97 @@
+{{define "oracle.html"}}<!doctype html>
+<html lang="en" data-theme="{{.Chrome.Theme}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oracle · {{.Chrome.SiteTitle}}</title>
+{{template "headlinks" .Chrome}}
+<style>
+  #oracle-svg { width: 100%; height: calc(100vh - 170px); min-height: 360px; display: block;
+    border: 1px solid rgba(128,128,128,.25); border-radius: 8px; background: rgba(128,128,128,.04); }
+  #oracle-svg line.edge { stroke: rgba(128,128,128,.45); stroke-width: 1; }
+  #oracle-svg line.edge.hot { stroke: var(--accent, #4a8c6f); stroke-width: 1.5; }
+  #oracle-svg circle.node { fill: var(--accent, #4a8c6f); cursor: pointer; opacity: .85; }
+  #oracle-svg circle.node.dim { opacity: .12; }
+  .oracle-hint { color: var(--muted, #888); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="layout">
+  {{template "sidebar" .Chrome}}
+  <main class="content">
+    <h1>The Oracle Tree</h1>
+    <p class="oracle-hint">Every page is a leaf; every <code>[[wikilink]]</code> a branch. Larger leaves are more connected. Hover a leaf to trace what it touches, click to open it.</p>
+    <div id="oracle" data-base="{{.Chrome.Base}}"><svg id="oracle-svg"></svg></div>
+    <p class="oracle-hint" id="oracle-status">Consulting the tree…</p>
+  </main>
+</div>
+<script>
+(function(){
+  var wrap = document.getElementById('oracle');
+  var base = wrap.dataset.base || '';
+  var svg = document.getElementById('oracle-svg');
+  var status = document.getElementById('oracle-status');
+  var NS = 'http://www.w3.org/2000/svg';
+  fetch(base + '/graph.json').then(function(r){ return r.json(); }).then(function(data){
+    var raw = data.nodes || [];
+    if (!raw.length){ status.textContent = 'No pages yet.'; return; }
+    var rect = svg.getBoundingClientRect();
+    var W = rect.width || 800, H = rect.height || 500;
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    var idx = new Map();
+    var nodes = raw.map(function(d, i){ idx.set(d.slug, i);
+      return { slug: d.slug, title: d.title || d.slug, deg: d.degree || 0,
+        x: Math.random()*W, y: Math.random()*H, dx: 0, dy: 0 }; });
+    var edges = (data.edges || []).filter(function(e){ return idx.has(e.from) && idx.has(e.to); })
+      .map(function(e){ return { s: idx.get(e.from), t: idx.get(e.to) }; });
+    var nbr = nodes.map(function(){ return new Set(); });
+    edges.forEach(function(e){ nbr[e.s].add(e.t); nbr[e.t].add(e.s); });
+    var n = nodes.length;
+    var k = Math.sqrt((W*H) / n) * 0.8;
+    var temp = W / 10;
+    var lineEls = edges.map(function(){ var l = document.createElementNS(NS,'line'); l.setAttribute('class','edge'); svg.appendChild(l); return l; });
+    var g = document.createElementNS(NS,'g'); svg.appendChild(g);
+    var circleEls = nodes.map(function(nd, i){
+      var c = document.createElementNS(NS,'circle'); c.setAttribute('class','node');
+      c.setAttribute('r', 4 + Math.sqrt(nd.deg)*2);
+      var tt = document.createElementNS(NS,'title'); tt.textContent = nd.title + (nd.deg ? ' · ' + nd.deg + ' links' : ''); c.appendChild(tt);
+      c.addEventListener('click', function(){ location.href = base + '/wiki/' + nd.slug.split('/').map(encodeURIComponent).join('/'); });
+      c.addEventListener('mouseenter', function(){ hot(i); });
+      c.addEventListener('mouseleave', cool);
+      g.appendChild(c); return c;
+    });
+    function hot(i){ var s = nbr[i];
+      circleEls.forEach(function(c, j){ if (j !== i && !s.has(j)) c.classList.add('dim'); else c.classList.remove('dim'); });
+      lineEls.forEach(function(l, e){ if (edges[e].s === i || edges[e].t === i) l.classList.add('hot'); else l.classList.remove('hot'); }); }
+    function cool(){ circleEls.forEach(function(c){ c.classList.remove('dim'); }); lineEls.forEach(function(l){ l.classList.remove('hot'); }); }
+    function step(){
+      var i, j;
+      for (i = 0; i < n; i++){ nodes[i].dx = 0; nodes[i].dy = 0; }
+      for (i = 0; i < n; i++){ var a = nodes[i];
+        for (j = i+1; j < n; j++){ var b = nodes[j];
+          var dx = a.x-b.x, dy = a.y-b.y, d = Math.sqrt(dx*dx+dy*dy) || 0.01, f = k*k/d;
+          var ux = dx/d*f, uy = dy/d*f; a.dx += ux; a.dy += uy; b.dx -= ux; b.dy -= uy; } }
+      edges.forEach(function(e){ var a = nodes[e.s], b = nodes[e.t];
+        var dx = a.x-b.x, dy = a.y-b.y, d = Math.sqrt(dx*dx+dy*dy) || 0.01, f = d*d/k;
+        var ux = dx/d*f, uy = dy/d*f; a.dx -= ux; a.dy -= uy; b.dx += ux; b.dy += uy; });
+      for (i = 0; i < n; i++){ var p = nodes[i]; p.dx += (W/2 - p.x)*0.01; p.dy += (H/2 - p.y)*0.01; }
+      for (i = 0; i < n; i++){ var q = nodes[i]; var d = Math.sqrt(q.dx*q.dx+q.dy*q.dy) || 0.01; var m = Math.min(d, temp);
+        q.x += q.dx/d*m; q.y += q.dy/d*m;
+        q.x = Math.max(8, Math.min(W-8, q.x)); q.y = Math.max(8, Math.min(H-8, q.y)); }
+      temp = Math.max(temp*0.97, 1);
+    }
+    function draw(){
+      for (var e = 0; e < edges.length; e++){ var l = lineEls[e], a = nodes[edges[e].s], b = nodes[edges[e].t];
+        l.setAttribute('x1', a.x); l.setAttribute('y1', a.y); l.setAttribute('x2', b.x); l.setAttribute('y2', b.y); }
+      for (var i = 0; i < n; i++){ circleEls[i].setAttribute('cx', nodes[i].x); circleEls[i].setAttribute('cy', nodes[i].y); }
+    }
+    var iter = 0, maxIter = n > 400 ? 160 : 400;
+    function loop(){ for (var s = 0; s < 4; s++){ step(); iter++; } draw();
+      if (iter < maxIter && temp > 1.2){ requestAnimationFrame(loop); }
+      else { status.textContent = n + ' pages · ' + edges.length + ' links'; } }
+    requestAnimationFrame(loop);
+  }).catch(function(){ status.textContent = 'Could not load the graph.'; });
+})();
+</script>
+</body>
+</html>{{end}}

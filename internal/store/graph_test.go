@@ -93,6 +93,34 @@ func TestBasenameResolution(t *testing.T) {
 	}
 }
 
+func TestGraphPrimitives(t *testing.T) {
+	s := seed(t)
+	nb, err := s.Neighbors("index", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nb) != 1 || nb[0].Slug != "guide" || nb[0].Distance != 1 {
+		t.Fatalf("neighbors(index,1) = %+v, want [guide@1]", nb)
+	}
+	path, err := s.Path("guide", "index")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(path) != 2 || path[0].Slug != "guide" || path[1].Slug != "index" {
+		t.Fatalf("path(guide,index) = %+v, want [guide index]", path)
+	}
+	if p, _ := s.Path("index", "lonely"); p != nil {
+		t.Errorf("path to disconnected page should be nil, got %+v", p)
+	}
+	hubs, err := s.Hubs(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hubs) != 3 || hubs[len(hubs)-1].Slug != "lonely" || hubs[len(hubs)-1].Degree != 0 {
+		t.Fatalf("hubs = %+v, want lonely last with degree 0", hubs)
+	}
+}
+
 func TestTags(t *testing.T) {
 	s := seed(t)
 	tags, err := s.Tags()
