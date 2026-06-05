@@ -9,6 +9,28 @@ import (
 	"testing"
 )
 
+func TestCanonicalSlug(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for in, want := range map[string]string{
+		"notes.md":  "notes", // a slug carries no extension
+		"/a/b/":     "a/b",   // surrounding slashes trimmed
+		"a/b":       "a/b",
+		"Keep-Case": "Keep-Case",
+	} {
+		if got, err := s.CanonicalSlug(in); err != nil || got != want {
+			t.Errorf("CanonicalSlug(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"", "..", "a/../b", ".hidden"} {
+		if _, err := s.CanonicalSlug(bad); err == nil {
+			t.Errorf("CanonicalSlug(%q) should be rejected", bad)
+		}
+	}
+}
+
 func TestWriteIdenticalIsNoop(t *testing.T) {
 	dir := t.TempDir()
 	s, err := New(dir)

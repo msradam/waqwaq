@@ -264,7 +264,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "wiki_neighbors",
-		Description: "List the pages connected to a page within N hops over the link graph, nearest first. Use this to pull a page's surrounding context in one call instead of guessing related pages.",
+		Description: "List the pages connected to a page within N hops over the link graph, nearest first, treating links as undirected (a link counts either way). Use this to pull a page's surrounding context in one call instead of guessing related pages. wiki_graph returns the directed edges.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in neighborsIn) (*mcp.CallToolResult, neighborsOut, error) {
 		depth := in.Depth
 		if depth <= 0 {
@@ -286,7 +286,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "wiki_path",
-		Description: "Find the shortest chain of linked pages connecting two pages, inclusive of both ends, or empty if they are not connected. Use this to answer how one topic relates to another.",
+		Description: "Find the shortest chain of linked pages connecting two pages, inclusive of both ends, or empty if they are not connected. Links are followed in either direction (undirected). Use this to answer how one topic relates to another.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in pathIn) (*mcp.CallToolResult, pathOut, error) {
 		metas, err := st.Path(in.From, in.To)
 		if err != nil {
@@ -416,7 +416,8 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		Message string `json:"message,omitempty" jsonschema:"commit message describing the change"`
 	}
 	type writeOut struct {
-		Status     string       `json:"status" jsonschema:"committed, proposed, or rejected"`
+		Status     string       `json:"status" jsonschema:"committed, proposed, rejected, or unchanged"`
+		Slug       string       `json:"slug,omitempty" jsonschema:"the canonical slug the page was filed under, which may differ from the one you passed"`
 		Committed  bool         `json:"committed"`
 		ProposalID string       `json:"proposal_id,omitempty"`
 		Issues     []lint.Issue `json:"issues"`
@@ -435,11 +436,12 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		if lint.HasErrors(issues) {
 			return &mcp.CallToolResult{IsError: true}, writeOut{Status: "rejected", Issues: issues}, nil
 		}
+		canon, _ := st.CanonicalSlug(in.Slug) // echo the slug the page is actually filed under
 
 		// Report an identical write honestly: nothing is committed, so do not claim
 		// it was, and skip the proposal path (there is nothing to review).
 		if cur, err := st.Read(in.Slug); err == nil && cur.Raw == in.Content {
-			return nil, writeOut{Status: "unchanged", Issues: issues}, nil
+			return nil, writeOut{Status: "unchanged", Slug: canon, Issues: issues}, nil
 		}
 
 		if opts.ForceReview || !principal.Trusted {
@@ -447,7 +449,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 			if err != nil {
 				return nil, writeOut{}, err
 			}
-			return nil, writeOut{Status: "proposed", ProposalID: p.ID, Issues: issues}, nil
+			return nil, writeOut{Status: "proposed", Slug: canon, ProposalID: p.ID, Issues: issues}, nil
 		}
 
 		message := in.Message
@@ -457,7 +459,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		if err := st.Write(in.Slug, in.Content, fmt.Sprintf("%s <agent@waqwaq.local>", principal.Name), message); err != nil {
 			return nil, writeOut{}, err
 		}
-		return nil, writeOut{Status: "committed", Committed: true, Issues: issues}, nil
+		return nil, writeOut{Status: "committed", Slug: canon, Committed: true, Issues: issues}, nil
 	})
 
 	type deleteIn struct {

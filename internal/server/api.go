@@ -35,6 +35,15 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// nonNil returns an empty slice instead of nil so a JSON consumer always sees a
+// list, never null.
+func nonNil[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
+}
+
 func refs(metas []store.PageMeta) []apiRef {
 	out := make([]apiRef, 0, len(metas))
 	for _, m := range metas {
@@ -94,7 +103,7 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 	if truncated {
 		hits = hits[:store.SearchLimit]
 	}
-	writeJSON(w, map[string]any{"hits": hits, "truncated": truncated})
+	writeJSON(w, map[string]any{"hits": nonNil(hits), "truncated": truncated})
 }
 
 func (s *Server) apiGraph(w http.ResponseWriter, r *http.Request) {
@@ -107,7 +116,9 @@ func (s *Server) apiGraph(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, g)
+	// Build the response explicitly so empty node/edge lists serialize as [], not
+	// null, without mutating the cached GraphView.
+	writeJSON(w, map[string]any{"nodes": nonNil(g.Nodes), "edges": nonNil(g.Edges), "truncated": g.Truncated, "total": g.Total})
 }
 
 func (s *Server) apiNeighbors(w http.ResponseWriter, r *http.Request) {
@@ -126,7 +137,7 @@ func (s *Server) apiNeighbors(w http.ResponseWriter, r *http.Request) {
 	if len(nb) > 200 { // Neighbors is nearest-first, so this keeps the closest
 		nb = nb[:200]
 	}
-	writeJSON(w, map[string]any{"neighbors": nb})
+	writeJSON(w, map[string]any{"neighbors": nonNil(nb)})
 }
 
 func (s *Server) apiPath(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +160,7 @@ func (s *Server) apiHubs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"hubs": hubs})
+	writeJSON(w, map[string]any{"hubs": nonNil(hubs)})
 }
 
 func (s *Server) apiHealth(w http.ResponseWriter, _ *http.Request) {

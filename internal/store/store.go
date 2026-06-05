@@ -171,8 +171,12 @@ func (s *Store) ensureGit() bool {
 	return cmd.Run() == nil
 }
 
-func (s *Store) pathFor(slug string) (string, error) {
-	clean := strings.Trim(slug, "/")
+// cleanSlug normalizes and validates a slug, returning its canonical form: no
+// surrounding slashes and no trailing .md extension (so "notes.md" files under
+// "notes", not "notes.md.md"). This is what the page is listed under, so a caller
+// can echo it back.
+func cleanSlug(slug string) (string, error) {
+	clean := strings.TrimSuffix(strings.Trim(slug, "/"), ".md")
 	if clean == "" {
 		return "", errors.New("empty slug")
 	}
@@ -191,6 +195,18 @@ func (s *Store) pathFor(slug string) (string, error) {
 		if unicode.IsControl(r) || isInvisibleFormat(r) {
 			return "", fmt.Errorf("slug contains a disallowed character")
 		}
+	}
+	return clean, nil
+}
+
+// CanonicalSlug returns the slug a page is actually filed under after
+// normalization, or an error if the slug is invalid.
+func (s *Store) CanonicalSlug(slug string) (string, error) { return cleanSlug(slug) }
+
+func (s *Store) pathFor(slug string) (string, error) {
+	clean, err := cleanSlug(slug)
+	if err != nil {
+		return "", err
 	}
 	p := filepath.Clean(filepath.Join(s.pages, filepath.FromSlash(clean)+".md"))
 	if p != s.pages && !strings.HasPrefix(p, s.pages+sep) {
@@ -409,7 +425,8 @@ func (s *Store) Read(slug string) (*Page, error) {
 	}
 	raw := string(data)
 	fm, body := SplitFrontmatter(raw)
-	return &Page{Slug: slug, Title: s.titleOf(p, slug), Frontmatter: fm, Body: body, Raw: raw}, nil
+	canon, _ := cleanSlug(slug) // pathFor already validated it
+	return &Page{Slug: canon, Title: s.titleOf(p, canon), Frontmatter: fm, Body: body, Raw: raw}, nil
 }
 
 func (s *Store) Write(slug, content, author, message string) error {
