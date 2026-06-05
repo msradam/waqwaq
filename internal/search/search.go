@@ -124,8 +124,8 @@ func (ix *Index) Search(query string) ([]store.SearchHit, error) {
 		return nil, err
 	}
 	rows, err := ix.db.Query(
-		`SELECT slug, title, snippet(pages, 2, '', '', '…', 12) FROM pages WHERE pages MATCH ? ORDER BY rank LIMIT 50`,
-		match)
+		`SELECT slug, title, snippet(pages, 2, '', '', '…', 12) FROM pages WHERE pages MATCH ? ORDER BY rank LIMIT ?`,
+		match, store.SearchLimit+1) // one past, so the caller can detect truncation
 	if err != nil {
 		return nil, err
 	}

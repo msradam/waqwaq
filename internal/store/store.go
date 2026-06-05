@@ -91,6 +91,10 @@ type SearchHit struct {
 	Snippet string `json:"snippet"`
 }
 
+// SearchLimit is how many hits search surfaces. Backends fetch one extra so a
+// caller can tell the results were truncated and report it.
+const SearchLimit = 50
+
 type GraphEdge struct {
 	From string `json:"from"`
 	To   string `json:"to"`
@@ -174,6 +178,9 @@ func (s *Store) pathFor(slug string) (string, error) {
 	for _, seg := range strings.Split(clean, "/") {
 		if strings.HasPrefix(seg, ".") {
 			return "", fmt.Errorf("invalid slug %q", slug)
+		}
+		if len(seg) > 200 { // stay under the filesystem's per-component limit with a clear error
+			return "", fmt.Errorf("slug segment too long (max 200 characters)")
 		}
 	}
 	p := filepath.Clean(filepath.Join(s.pages, filepath.FromSlash(clean)+".md"))
@@ -386,6 +393,9 @@ func (s *Store) Read(slug string) (*Page, error) {
 	}
 	data, err := os.ReadFile(p)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("page %q not found: %w", slug, os.ErrNotExist) // avoid leaking the absolute path
+		}
 		return nil, err
 	}
 	raw := string(data)
@@ -479,7 +489,7 @@ func (s *Store) Search(query string) ([]SearchHit, error) {
 		}
 		if strings.Contains(strings.ToLower(page.Title+"\n"+page.Body), needle) {
 			hits = append(hits, SearchHit{Slug: m.Slug, Title: m.Title, Snippet: snippet(page.Body, needle)})
-			if len(hits) >= 50 {
+			if len(hits) > SearchLimit { // one past, so the caller can detect truncation
 				break
 			}
 		}

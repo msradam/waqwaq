@@ -670,6 +670,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if len(hits) > store.SearchLimit {
+		hits = hits[:store.SearchLimit]
+	}
 	s.exec(w, "page.html", pageView{Chrome: s.chrome(r, "", q), Title: "Search", Query: q, IsSearch: true, Hits: hits})
 }
 

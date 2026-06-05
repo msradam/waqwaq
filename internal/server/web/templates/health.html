@@ -23,7 +23,7 @@
     {{if .Health.Stale}}<ul class="health-list">{{range .Health.Stale}}<li><a href="{{$.Chrome.Base}}/wiki/{{.Slug}}">{{.Title}}</a> <span class="muted">{{.Days}} days</span></li>{{end}}</ul>{{else}}<p class="muted">None.</p>{{end}}
 
     <h2>New growth <span class="muted">· recently changed</span></h2>
-    {{if .Recent}}<ul class="health-list">{{range .Recent}}<li><a href="{{$.Chrome.Base}}/wiki/{{.Slug}}">{{.Title}}</a> <span class="muted">by {{.Author}}</span></li>{{end}}</ul>{{else}}<p class="muted">None.</p>{{end}}
+    {{if .Recent}}<ul class="health-list">{{range .Recent}}<li>{{if .Deleted}}<span class="muted">{{.Slug}}</span> <span class="op-delete">deleted</span>{{else}}<a href="{{$.Chrome.Base}}/wiki/{{.Slug}}">{{.Title}}</a>{{end}} <span class="muted">by {{.Author}}</span></li>{{end}}</ul>{{else}}<p class="muted">None.</p>{{end}}
   </main>
 </div>
 </body>

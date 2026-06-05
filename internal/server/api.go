@@ -90,7 +90,11 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"hits": hits})
+	truncated := len(hits) > store.SearchLimit
+	if truncated {
+		hits = hits[:store.SearchLimit]
+	}
+	writeJSON(w, map[string]any{"hits": hits, "truncated": truncated})
 }
 
 func (s *Server) apiGraph(w http.ResponseWriter, r *http.Request) {

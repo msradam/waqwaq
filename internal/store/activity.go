@@ -51,10 +51,11 @@ func (s *Store) RevExists(ref string) bool {
 }
 
 type Change struct {
-	Slug   string    `json:"slug"`
-	Title  string    `json:"title"`
-	Author string    `json:"author"`
-	When   time.Time `json:"when"`
+	Slug    string    `json:"slug"`
+	Title   string    `json:"title"`
+	Author  string    `json:"author"`
+	When    time.Time `json:"when"`
+	Deleted bool      `json:"deleted,omitempty"`
 }
 
 type Revision struct {
@@ -85,7 +86,9 @@ func (s *Store) Recent(n int) ([]Change, error) {
 	}
 
 	pagesRel := filepath.ToSlash(s.relPages())
-	cmd := exec.Command("git", "log", "-n", "2000", "--name-only", "--format=%x01%an%x1f%aI")
+	// core.quotePath=false keeps non-ASCII (unicode/emoji) slugs unquoted so the
+	// path parses; --name-status marks deletions (D) so they appear in the feed.
+	cmd := exec.Command("git", "-c", "core.quotePath=false", "log", "-n", "2000", "--name-status", "--format=%x01%an%x1f%aI")
 	cmd.Dir = s.gitRoot
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -118,16 +121,25 @@ func (s *Store) Recent(n int) ([]Change, error) {
 		if line == "" {
 			continue
 		}
-		slug, ok := slugForGitPath(line, pagesRel)
+		// --name-status lines are "<status>\t<path>", or "<status>\t<old>\t<new>"
+		// for renames; the current path is the last field.
+		fields := strings.Split(line, "\t")
+		if len(fields) < 2 {
+			continue
+		}
+		slug, ok := slugForGitPath(fields[len(fields)-1], pagesRel)
 		if !ok || seen[slug] {
 			continue
 		}
+		seen[slug] = true
 		t, known := title[slug]
 		if !known {
-			continue
+			t = slug // a deleted (or renamed-away) page has no current title
 		}
-		seen[slug] = true
-		changes = append(changes, Change{Slug: slug, Title: t, Author: author, When: when})
+		changes = append(changes, Change{
+			Slug: slug, Title: t, Author: author, When: when,
+			Deleted: strings.HasPrefix(fields[0], "D"),
+		})
 		if len(changes) >= n {
 			break
 		}

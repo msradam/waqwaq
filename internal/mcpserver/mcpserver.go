@@ -108,17 +108,22 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		Query string `json:"query" jsonschema:"text to search for across page titles and bodies"`
 	}
 	type searchOut struct {
-		Hits []store.SearchHit `json:"hits"`
+		Hits      []store.SearchHit `json:"hits"`
+		Truncated bool              `json:"truncated,omitempty"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "wiki_search",
-		Description: "Full-text search across all wiki pages.",
+		Description: "Prefix-AND full-text search across page titles and bodies (each term matches as a prefix; boolean operators are treated as literal words). When truncated is true, more pages match than were returned; narrow the query.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in searchIn) (*mcp.CallToolResult, searchOut, error) {
 		hits, err := searcher.Search(in.Query)
 		if err != nil {
 			return nil, searchOut{}, err
 		}
-		return nil, searchOut{Hits: hits}, nil
+		truncated := len(hits) > store.SearchLimit
+		if truncated {
+			hits = hits[:store.SearchLimit]
+		}
+		return nil, searchOut{Hits: hits, Truncated: truncated}, nil
 	})
 
 	type graphIn struct {
@@ -343,7 +348,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "wiki_recent",
-		Description: "List recently changed pages, newest first.",
+		Description: "List recently changed pages, newest first. Removed pages appear with deleted set to true.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in recentIn) (*mcp.CallToolResult, recentOut, error) {
 		limit := in.Limit
 		if limit <= 0 {

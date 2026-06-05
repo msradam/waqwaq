@@ -33,6 +33,44 @@ func TestDelete(t *testing.T) {
 	}
 }
 
+func TestRecentUnicodeAndDeletions(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.git {
+		t.Skip("git unavailable")
+	}
+	write := func(slug string) {
+		if err := s.Write(slug, "---\ntitle: "+slug+"\n---\nbody\n", "", "add "+slug); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("ascii")
+	uni := "café-🌳-日本語"
+	write(uni)
+	write("doomed")
+	if err := s.Delete("doomed", "", "remove doomed"); err != nil {
+		t.Fatal(err)
+	}
+	changes, err := s.Recent(20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(map[string]Change, len(changes))
+	for _, c := range changes {
+		got[c.Slug] = c
+	}
+	if _, ok := got[uni]; !ok {
+		t.Errorf("Recent dropped the unicode-slug page %q", uni)
+	}
+	if d, ok := got["doomed"]; !ok {
+		t.Error("Recent dropped the deleted page")
+	} else if !d.Deleted {
+		t.Error("deleted page in Recent is not marked Deleted")
+	}
+}
+
 func TestFrontmatterBodyWithThematicBreak(t *testing.T) {
 	fm, body := SplitFrontmatter("---\ntitle: T\n---\n\nintro\n\n---\n\nmore\n")
 	if fm["title"] != "T" {
