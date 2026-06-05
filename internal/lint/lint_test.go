@@ -61,6 +61,16 @@ func TestBrokenWikilinkIsWarning(t *testing.T) {
 	}
 }
 
+func TestEmbedNotLinted(t *testing.T) {
+	fm := map[string]any{"title": "T"}
+	if got := Check(fm, "![[ghost]]\n", knows(), Rules{}); len(got) != 0 {
+		t.Errorf("a missing embed is content, not a broken link: %v", got)
+	}
+	if got := Check(fm, "[[ghost]]\n", knows(), Rules{}); len(got) != 1 {
+		t.Errorf("a missing plain link should still warn: %v", got)
+	}
+}
+
 func TestRequiredFrontmatterField(t *testing.T) {
 	rules := Rules{RequireFrontmatter: []string{"owner"}}
 	fm := map[string]any{"title": "Hello"}

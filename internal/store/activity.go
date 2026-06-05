@@ -204,40 +204,43 @@ func (s *Store) recentByModTime(metas []PageMeta, title map[string]string, n int
 	return out
 }
 
-// History returns the git revisions of a single page, newest first. It returns
-// os.ErrNotExist for a missing page, so a caller can distinguish that from an
-// existing page that simply has no commits yet.
+// History returns the git revisions of a page, newest first. A deleted page
+// still surfaces its revisions, since its content stays recoverable from history.
+// It returns os.ErrNotExist only when the page neither exists nor has any history
+// (so a caller can tell a never-created slug from an existing untracked one).
 func (s *Store) History(slug string) ([]Revision, error) {
 	p, err := s.pathFor(slug)
 	if err != nil {
 		return nil, err
 	}
+	var revs []Revision
+	if s.git {
+		rel, err := filepath.Rel(s.gitRoot, p)
+		if err != nil {
+			return nil, err
+		}
+		cmd := exec.Command("git", "log", "--format=%h%x1f%an%x1f%aI%x1f%s", "-n", "50", "--", rel)
+		cmd.Dir = s.gitRoot
+		out, err := cmd.Output()
+		if err != nil {
+			return nil, err
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			parts := strings.SplitN(line, "\x1f", 4)
+			if len(parts) < 4 {
+				continue
+			}
+			when, _ := time.Parse(time.RFC3339, parts[2])
+			revs = append(revs, Revision{Hash: parts[0], Author: parts[1], When: when, Message: parts[3]})
+		}
+	}
+	if len(revs) > 0 {
+		return revs, nil
+	}
 	if _, err := os.Stat(p); err != nil {
 		return nil, fmt.Errorf("page %q not found: %w", slug, os.ErrNotExist)
 	}
-	if !s.git {
-		return nil, nil
-	}
-	rel, err := filepath.Rel(s.gitRoot, p)
-	if err != nil {
-		return nil, err
-	}
-	cmd := exec.Command("git", "log", "--format=%h%x1f%an%x1f%aI%x1f%s", "-n", "50", "--", rel)
-	cmd.Dir = s.gitRoot
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, err
-	}
-	var revs []Revision
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		parts := strings.SplitN(line, "\x1f", 4)
-		if len(parts) < 4 {
-			continue
-		}
-		when, _ := time.Parse(time.RFC3339, parts[2])
-		revs = append(revs, Revision{Hash: parts[0], Author: parts[1], When: when, Message: parts[3]})
-	}
-	return revs, nil
+	return nil, nil
 }
 
 // Tags maps every tag to the pages that carry it in their frontmatter, cached

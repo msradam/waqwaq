@@ -17,6 +17,7 @@ func TestCanonicalSlug(t *testing.T) {
 	for in, want := range map[string]string{
 		"notes.md":  "notes", // a slug carries no extension
 		"/a/b/":     "a/b",   // surrounding slashes trimmed
+		"a//b":      "a/b",   // internal double slash collapsed, matching the filed path
 		"a/b":       "a/b",
 		"Keep-Case": "Keep-Case",
 	} {
@@ -28,6 +29,34 @@ func TestCanonicalSlug(t *testing.T) {
 		if _, err := s.CanonicalSlug(bad); err == nil {
 			t.Errorf("CanonicalSlug(%q) should be rejected", bad)
 		}
+	}
+}
+
+func TestHistoryOfDeletedPage(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.git {
+		t.Skip("git unavailable")
+	}
+	if err := s.Write("doomed", "---\ntitle: D\n---\nv1\n", "", "add"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete("doomed", "", "remove"); err != nil {
+		t.Fatal(err)
+	}
+	// A deleted page still surfaces its history (content recoverable).
+	revs, err := s.History("doomed")
+	if err != nil {
+		t.Fatalf("History of a deleted page errored: %v", err)
+	}
+	if len(revs) == 0 {
+		t.Error("deleted page should still have revisions")
+	}
+	// A never-created slug is genuinely not found.
+	if _, err := s.History("never-existed"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("History of a never-created slug = %v, want ErrNotExist", err)
 	}
 }
 

@@ -176,17 +176,23 @@ func (s *Store) ensureGit() bool {
 // "notes", not "notes.md.md"). This is what the page is listed under, so a caller
 // can echo it back.
 func cleanSlug(slug string) (string, error) {
-	clean := strings.TrimSuffix(strings.Trim(slug, "/"), ".md")
-	if clean == "" {
-		return "", errors.New("empty slug")
-	}
-	for _, seg := range strings.Split(clean, "/") {
+	raw := strings.TrimSuffix(strings.Trim(slug, "/"), ".md")
+	var segs []string
+	for _, seg := range strings.Split(raw, "/") {
+		if seg == "" {
+			continue // collapse repeated slashes, matching the filed path
+		}
 		if strings.HasPrefix(seg, ".") {
 			return "", fmt.Errorf("invalid slug %q", slug)
 		}
 		if len(seg) > 200 { // stay under the filesystem's per-component limit with a clear error
 			return "", fmt.Errorf("slug segment too long (max 200 characters)")
 		}
+		segs = append(segs, seg)
+	}
+	clean := strings.Join(segs, "/")
+	if clean == "" {
+		return "", errors.New("empty slug")
 	}
 	for _, r := range clean {
 		// Reject control, zero-width, and bidi-control characters: invisible in a

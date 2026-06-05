@@ -26,7 +26,9 @@ type BannedTerm struct {
 	Severity string `json:"severity,omitempty"` // "error" or "warning" (default)
 }
 
-var wikiLink = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
+// wikiLink captures an optional leading ! so embeds (![[...]]) can be skipped,
+// matching the link graph, which treats embeds as content rather than edges.
+var wikiLink = regexp.MustCompile(`(!?)\[\[([^\]]+)\]\]`)
 
 // Check validates a page's frontmatter and body against the configured rules.
 // resolves reports whether a wikilink target is fine, using the store's tolerant
@@ -80,7 +82,10 @@ func Check(frontmatter map[string]any, body string, resolves func(string) bool, 
 	seen := map[string]bool{}
 	unresolved := 0
 	for _, m := range wikiLink.FindAllStringSubmatch(stripCode(body), -1) {
-		raw := strings.TrimSpace(m[1])
+		if m[1] == "!" {
+			continue // an embed is content, not a link to resolve
+		}
+		raw := strings.TrimSpace(m[2])
 		display := raw
 		if i := strings.IndexAny(display, "|#"); i >= 0 {
 			display = strings.TrimSpace(display[:i])
