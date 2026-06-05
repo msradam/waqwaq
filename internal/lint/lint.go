@@ -33,8 +33,19 @@ var wikiLink = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 func Check(frontmatter map[string]any, body string, knownSlugs map[string]bool, rules Rules) []Issue {
 	var issues []Issue
 
-	if title, _ := frontmatter["title"].(string); strings.TrimSpace(title) == "" {
-		issues = append(issues, Issue{"error", "frontmatter is missing a non-empty `title`"})
+	switch t := frontmatter["title"].(type) {
+	case string:
+		if strings.TrimSpace(t) == "" {
+			issues = append(issues, Issue{"error", "frontmatter `title` is empty"})
+		}
+	case nil:
+		if frontmatter == nil {
+			issues = append(issues, Issue{"error", "page has no parseable YAML frontmatter; add a `---` block with a `title`"})
+		} else {
+			issues = append(issues, Issue{"error", "frontmatter is missing a `title`"})
+		}
+	default:
+		issues = append(issues, Issue{"error", fmt.Sprintf("frontmatter `title` must be a string, got %T", t)})
 	}
 
 	for _, field := range rules.RequireFrontmatter {
@@ -59,8 +70,11 @@ func Check(frontmatter map[string]any, body string, knownSlugs map[string]bool, 
 		issues = append(issues, Issue{severity, message})
 	}
 
+	// Strip code before scanning wikilinks so a [[link]] shown inside a code block
+	// is not flagged, matching how the link graph resolves edges.
 	seen := map[string]bool{}
-	for _, m := range wikiLink.FindAllStringSubmatch(body, -1) {
+	unresolved := 0
+	for _, m := range wikiLink.FindAllStringSubmatch(stripCode(body), -1) {
 		target := m[1]
 		if i := strings.IndexAny(target, "|#"); i >= 0 {
 			target = target[:i]
@@ -70,11 +84,32 @@ func Check(frontmatter map[string]any, body string, knownSlugs map[string]bool, 
 			continue
 		}
 		seen[target] = true
-		if !knownSlugs[target] {
+		if knownSlugs[target] {
+			continue
+		}
+		unresolved++
+		if unresolved <= maxLinkWarnings {
 			issues = append(issues, Issue{"warning", "wikilink [[" + target + "]] does not resolve to a known page"})
 		}
 	}
+	if unresolved > maxLinkWarnings {
+		issues = append(issues, Issue{"warning", fmt.Sprintf("and %d more unresolved wikilinks", unresolved-maxLinkWarnings)})
+	}
 	return issues
+}
+
+const maxLinkWarnings = 20
+
+var (
+	fenceRe = regexp.MustCompile("(?s)```.*?```|~~~.*?~~~")
+	icodeRe = regexp.MustCompile("`[^`\n]*`")
+)
+
+// stripCode removes fenced and inline code so their contents are not linted as
+// page content. It mirrors the link graph's code handling.
+func stripCode(body string) string {
+	body = fenceRe.ReplaceAllString(body, "")
+	return icodeRe.ReplaceAllString(body, "")
 }
 
 func HasErrors(issues []Issue) bool {

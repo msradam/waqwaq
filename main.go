@@ -697,10 +697,10 @@ func runCheck(st *store.Store, rules lint.Rules) []checkFinding {
 			continue
 		}
 		for _, is := range lint.Check(page.Frontmatter, page.Body, known, rules) {
-			// Skip lint's exact-match wikilink warning (the graph resolves links)
-			// and the missing-frontmatter-title error (a page's title falls back to
-			// its H1 or filename, which every read surface uses).
-			if strings.HasPrefix(is.Message, "wikilink ") || strings.Contains(is.Message, "missing a non-empty `title`") {
+			// Skip lint's wikilink warnings (the graph resolves links and Health
+			// reports the truly broken ones) and any title complaint (a page's
+			// title falls back to its H1 or filename, which every read surface uses).
+			if strings.Contains(is.Message, "wikilink") || strings.Contains(is.Message, "`title`") {
 				continue
 			}
 			out = append(out, checkFinding{m.Slug, is.Severity, is.Message})

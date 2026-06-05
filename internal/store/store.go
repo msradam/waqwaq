@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/adrg/frontmatter"
 )
@@ -181,6 +182,14 @@ func (s *Store) pathFor(slug string) (string, error) {
 		}
 		if len(seg) > 200 { // stay under the filesystem's per-component limit with a clear error
 			return "", fmt.Errorf("slug segment too long (max 200 characters)")
+		}
+	}
+	for _, r := range clean {
+		// Reject control, zero-width, and bidi-control characters: invisible in a
+		// slug, they enable spoofing and host-dependent collisions. Emoji and CJK
+		// (not in these ranges) stay allowed.
+		if unicode.IsControl(r) || isInvisibleFormat(r) {
+			return "", fmt.Errorf("slug contains a disallowed character")
 		}
 	}
 	p := filepath.Clean(filepath.Join(s.pages, filepath.FromSlash(clean)+".md"))
@@ -451,6 +460,20 @@ func (s *Store) Delete(slug, author, message string) error {
 	if _, err := os.Stat(p); err != nil {
 		return err
 	}
+	rel, err := filepath.Rel(s.gitRoot, p)
+	if err != nil {
+		return err
+	}
+	// Snapshot an untracked working-tree file (e.g. an Obsidian-vault drop-in)
+	// into git before removing it, so the deletion stays recoverable from
+	// history. Without this, removing an untracked file and then trying to stage
+	// it fails, leaving the file gone with nothing committed. commitDelete stays
+	// false only when there is no git or the file cannot be staged (gitignored),
+	// in which case it is a plain working-tree removal.
+	commitDelete := false
+	if s.git {
+		commitDelete = s.tracked(rel) || s.commit("waqwaq: snapshot "+slug+" before delete", author, rel) == nil
+	}
 	if err := os.Remove(p); err != nil {
 		return err
 	}
@@ -461,15 +484,36 @@ func (s *Store) Delete(slug, author, message string) error {
 			break // not empty
 		}
 	}
-	rel, err := filepath.Rel(s.gitRoot, p)
-	if err != nil {
-		return err
-	}
-	if err := s.commit(message, author, rel); err != nil {
-		return err
+	if commitDelete {
+		if err := s.commit(message, author, rel); err != nil {
+			return err
+		}
 	}
 	s.invalidateSignature()
 	return nil
+}
+
+// isInvisibleFormat reports whether r is a zero-width or bidi-control character,
+// which has no place in a slug.
+func isInvisibleFormat(r rune) bool {
+	switch {
+	case r >= 0x200B && r <= 0x200F: // zero-width spaces/joiners, LRM/RLM
+		return true
+	case r >= 0x202A && r <= 0x202E: // bidi embeddings and overrides
+		return true
+	case r >= 0x2066 && r <= 0x2069: // bidi isolates
+		return true
+	case r == 0x2060 || r == 0xFEFF: // word joiner, zero-width no-break space/BOM
+		return true
+	}
+	return false
+}
+
+// tracked reports whether a path (relative to the git root) is tracked by git.
+func (s *Store) tracked(rel string) bool {
+	cmd := exec.Command("git", "ls-files", "--error-unmatch", "--", rel)
+	cmd.Dir = s.gitRoot
+	return cmd.Run() == nil
 }
 
 func (s *Store) Search(query string) ([]SearchHit, error) {
@@ -535,6 +579,9 @@ func (s *Store) ReadRaw(name string) (string, error) {
 		return "", err
 	}
 	data, err := os.ReadFile(filepath.Join(s.raw, name))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("raw document %q not found: %w", name, os.ErrNotExist) // avoid leaking the absolute path
+	}
 	return string(data), err
 }
 

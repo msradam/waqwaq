@@ -3,10 +3,43 @@ package store
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestDeleteUntrackedIsRecoverable(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.git {
+		t.Skip("git unavailable")
+	}
+	// Drop a file straight into the pages dir (vault-style) so it is untracked.
+	const token = "vaultrecovertoken"
+	p := filepath.Join(s.Pages(), "dropped.md")
+	if err := os.WriteFile(p, []byte("---\ntitle: D\n---\n"+token+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete("dropped", "", "remove dropped"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
+		t.Error("file was not removed from disk")
+	}
+	cmd := exec.Command("git", "log", "-S", token, "--format=%H")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(out)) == "" {
+		t.Error("deleted untracked file is not recoverable from git history")
+	}
+}
 
 func TestDelete(t *testing.T) {
 	s, err := New(t.TempDir())
