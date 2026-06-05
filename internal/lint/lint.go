@@ -41,13 +41,16 @@ func Check(frontmatter map[string]any, body string, resolves func(string) bool, 
 			issues = append(issues, Issue{"error", "frontmatter `title` is empty"})
 		}
 	case nil:
-		if frontmatter == nil {
-			issues = append(issues, Issue{"error", "page has no parseable YAML frontmatter; add a `---` block with a `title`"})
-		} else {
+		switch {
+		case frontmatter != nil:
 			issues = append(issues, Issue{"error", "frontmatter is missing a `title`"})
+		case strings.HasPrefix(strings.TrimSpace(body), "---"):
+			issues = append(issues, Issue{"error", "frontmatter is present but could not be parsed; check the YAML"})
+		default:
+			issues = append(issues, Issue{"error", "page has no frontmatter; add a `---` block with a `title`"})
 		}
 	default:
-		issues = append(issues, Issue{"error", fmt.Sprintf("frontmatter `title` must be a string, got %T", t)})
+		issues = append(issues, Issue{"error", "frontmatter `title` must be text, not " + typeName(t)})
 	}
 
 	for _, field := range rules.RequireFrontmatter {
@@ -126,4 +129,21 @@ func HasErrors(issues []Issue) bool {
 func isEmpty(v any) bool {
 	s, ok := v.(string)
 	return ok && strings.TrimSpace(s) == ""
+}
+
+// typeName describes a non-string title value in plain terms, rather than
+// leaking a Go type name into the lint message.
+func typeName(v any) string {
+	switch v.(type) {
+	case []any:
+		return "a list"
+	case map[string]any, map[any]any:
+		return "a mapping"
+	case int, int64, float64:
+		return "a number"
+	case bool:
+		return "true/false"
+	default:
+		return "a non-text value"
+	}
 }

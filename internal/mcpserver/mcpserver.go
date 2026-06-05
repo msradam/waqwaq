@@ -423,7 +423,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "wiki_write",
-		Description: "Create or replace a wiki page. Lint runs first; errors block it. A trusted caller commits directly to git; otherwise the write is queued as a proposal for a human to approve. Check the returned status.",
+		Description: "Create or replace a wiki page. Lint runs first; errors block it. A trusted caller commits directly to git; otherwise the write is queued as a proposal for a human to approve. The status is committed, proposed, rejected, or unchanged (the page already had this exact content, so nothing was written).",
 	}, func(_ context.Context, req *mcp.CallToolRequest, in writeIn) (*mcp.CallToolResult, writeOut, error) {
 		principal := principalFrom(req, reg)
 		resolves, err := st.LinkChecker()
@@ -434,6 +434,12 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		issues := lint.Check(fm, body, resolves, opts.Rules)
 		if lint.HasErrors(issues) {
 			return &mcp.CallToolResult{IsError: true}, writeOut{Status: "rejected", Issues: issues}, nil
+		}
+
+		// Report an identical write honestly: nothing is committed, so do not claim
+		// it was, and skip the proposal path (there is nothing to review).
+		if cur, err := st.Read(in.Slug); err == nil && cur.Raw == in.Content {
+			return nil, writeOut{Status: "unchanged", Issues: issues}, nil
 		}
 
 		if opts.ForceReview || !principal.Trusted {

@@ -1,6 +1,30 @@
 package lint
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestTitleErrorMessages(t *testing.T) {
+	cases := []struct {
+		name string
+		fm   map[string]any
+		body string
+		want string
+	}{
+		{"int", map[string]any{"title": 42}, "", "not a number"},
+		{"list", map[string]any{"title": []any{"a", "b"}}, "", "not a list"},
+		{"malformed", nil, "---\nbad: [\n---\n", "could not be parsed"},
+		{"none", nil, "# H1 only\n", "no frontmatter"},
+		{"empty", map[string]any{"title": "  "}, "", "is empty"},
+	}
+	for _, c := range cases {
+		got := Check(c.fm, c.body, knows(), Rules{})
+		if len(got) != 1 || !strings.Contains(got[0].Message, c.want) {
+			t.Errorf("%s: got %v, want a message containing %q", c.name, got, c.want)
+		}
+	}
+}
 
 // knows builds a resolves predicate that accepts exactly the given targets.
 func knows(targets ...string) func(string) bool {

@@ -204,14 +204,19 @@ func (s *Store) recentByModTime(metas []PageMeta, title map[string]string, n int
 	return out
 }
 
-// History returns the git revisions of a single page, newest first.
+// History returns the git revisions of a single page, newest first. It returns
+// os.ErrNotExist for a missing page, so a caller can distinguish that from an
+// existing page that simply has no commits yet.
 func (s *Store) History(slug string) ([]Revision, error) {
-	if !s.git {
-		return nil, nil
-	}
 	p, err := s.pathFor(slug)
 	if err != nil {
 		return nil, err
+	}
+	if _, err := os.Stat(p); err != nil {
+		return nil, fmt.Errorf("page %q not found: %w", slug, os.ErrNotExist)
+	}
+	if !s.git {
+		return nil, nil
 	}
 	rel, err := filepath.Rel(s.gitRoot, p)
 	if err != nil {
