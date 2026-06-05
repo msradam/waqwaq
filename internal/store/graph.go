@@ -200,22 +200,51 @@ func newLinkResolver(metas []PageMeta) *linkResolver {
 }
 
 func (r *linkResolver) resolve(target string) string {
+	// A path-qualified link ("folder/page") resolves only by its full path, never
+	// by basename: otherwise deleting folder/page would silently re-point the link
+	// at an unrelated page that merely shares the "page" basename.
+	bare := !strings.Contains(target, "/")
 	if s, ok := r.exact[target]; ok {
 		return s
 	}
 	if s, ok := r.lower[strings.ToLower(target)]; ok {
 		return s
 	}
-	if s, ok := r.base[strings.ToLower(baseName(target))]; ok {
-		return s
+	if bare {
+		if s, ok := r.base[strings.ToLower(baseName(target))]; ok {
+			return s
+		}
 	}
 	if s, ok := r.norm[normalize(target)]; ok {
 		return s
 	}
-	if s, ok := r.norm[normalize(baseName(target))]; ok {
-		return s
+	if bare {
+		if s, ok := r.norm[normalize(baseName(target))]; ok {
+			return s
+		}
 	}
 	return ""
+}
+
+// LinkChecker returns a predicate reporting whether a wikilink target is fine,
+// using the same tolerant resolution as the link graph: a target is fine if it
+// resolves to a page, or is a benign asset, same-page anchor, or external URL.
+// Lint uses it so its warnings agree with what wiki_health reports as broken.
+func (s *Store) LinkChecker() (func(string) bool, error) {
+	metas, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	r := newLinkResolver(metas)
+	return func(target string) bool {
+		if resolveTarget(r, target) != "" {
+			return true
+		}
+		if isAssetRef(target) || strings.Contains(target, "://") {
+			return true
+		}
+		return brokenName(target) == ""
+	}, nil
 }
 
 // normalize folds case and maps spaces to hyphens, so a link "Authoring Content"

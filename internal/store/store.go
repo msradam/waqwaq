@@ -419,6 +419,9 @@ func (s *Store) Write(slug, content, author, message string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if existing, err := os.ReadFile(p); err == nil && string(existing) == content {
+		return nil // identical content: a no-op, not an empty commit
+	}
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
@@ -593,6 +596,21 @@ func (s *Store) AddRaw(name string, data []byte) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(s.raw, name), data, 0o644)
+}
+
+// DeleteRaw removes a raw source document. Raw documents are working-tree only
+// (never committed), so this is a plain removal.
+func (s *Store) DeleteRaw(name string) error {
+	if err := safeRawName(name); err != nil {
+		return err
+	}
+	if err := os.Remove(filepath.Join(s.raw, name)); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("raw document %q not found: %w", name, os.ErrNotExist)
+		}
+		return err
+	}
+	return nil
 }
 
 func safeRawName(name string) error {

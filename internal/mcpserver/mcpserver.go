@@ -25,7 +25,7 @@ const baseInstructions = `This is a Waqwaq wiki: git-backed markdown pages that 
 Read with wiki_list, wiki_read, wiki_search, and wiki_graph (the page link graph).
 Navigate by relationship: wiki_hubs lists the most-connected pages to read first, wiki_neighbors pulls a page's linked neighbourhood in one call, wiki_path returns the chain connecting two pages, and wiki_backlinks lists what links to a page.
 Maintain the wiki with wiki_health (orphans, broken links, stale pages), wiki_recent (recent changes), wiki_history, and wiki_tags. Use wiki_health to find what needs fixing.
-Raw documents to synthesise from live under raw/: list them with wiki_list_raw, read with wiki_read_raw, add with wiki_ingest.
+Raw documents to synthesise from live under raw/: list them with wiki_list_raw, read with wiki_read_raw, add with wiki_ingest, remove with wiki_delete_raw.
 Create or replace pages with wiki_write. Each page needs YAML frontmatter with a title, and links other pages with [[slug]] or [[slug|label]] wikilinks. Remove a page with wiki_delete (recoverable from git history).
 wiki_lint dry-runs the checks. A missing title blocks a write; unresolved wikilinks are warnings.
 Depending on your access, a write either commits straight to git or is queued as a proposal for a human to approve. Check the status field returned by wiki_write, and list the queue with wiki_list_proposals.`
@@ -197,12 +197,12 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		Name:        "wiki_lint",
 		Description: "Dry-run the write checks against some markdown without saving it.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in lintIn) (*mcp.CallToolResult, lintOut, error) {
-		known, err := st.KnownSlugs()
+		resolves, err := st.LinkChecker()
 		if err != nil {
 			return nil, lintOut{}, err
 		}
 		fm, body := store.SplitFrontmatter(in.Content)
-		issues := lint.Check(fm, body, known, opts.Rules)
+		issues := lint.Check(fm, body, resolves, opts.Rules)
 		return nil, lintOut{Issues: issues, OK: !lint.HasErrors(issues)}, nil
 	})
 
@@ -426,12 +426,12 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		Description: "Create or replace a wiki page. Lint runs first; errors block it. A trusted caller commits directly to git; otherwise the write is queued as a proposal for a human to approve. Check the returned status.",
 	}, func(_ context.Context, req *mcp.CallToolRequest, in writeIn) (*mcp.CallToolResult, writeOut, error) {
 		principal := principalFrom(req, reg)
-		known, err := st.KnownSlugs()
+		resolves, err := st.LinkChecker()
 		if err != nil {
 			return nil, writeOut{}, err
 		}
 		fm, body := store.SplitFrontmatter(in.Content)
-		issues := lint.Check(fm, body, known, opts.Rules)
+		issues := lint.Check(fm, body, resolves, opts.Rules)
 		if lint.HasErrors(issues) {
 			return &mcp.CallToolResult{IsError: true}, writeOut{Status: "rejected", Issues: issues}, nil
 		}
@@ -506,6 +506,22 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 			return nil, ingestOut{}, err
 		}
 		return nil, ingestOut{Stored: "raw/" + in.Name}, nil
+	})
+
+	type deleteRawIn struct {
+		Name string `json:"name" jsonschema:"file name of the raw document to remove"`
+	}
+	type deleteRawOut struct {
+		Deleted string `json:"deleted"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "wiki_delete_raw",
+		Description: "Remove a raw source document from raw/.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in deleteRawIn) (*mcp.CallToolResult, deleteRawOut, error) {
+		if err := st.DeleteRaw(in.Name); err != nil {
+			return nil, deleteRawOut{}, err
+		}
+		return nil, deleteRawOut{Deleted: "raw/" + in.Name}, nil
 	})
 
 	return s

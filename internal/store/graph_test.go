@@ -2,6 +2,22 @@ package store
 
 import "testing"
 
+func TestResolvePathQualifiedNoBasenameFallback(t *testing.T) {
+	r := newLinkResolver([]PageMeta{{Slug: "index"}, {Slug: "stress/index"}, {Slug: "stress/alpha"}})
+	if got := r.resolve("stress/index"); got != "stress/index" {
+		t.Errorf("path link resolved to %q, want stress/index", got)
+	}
+	if got := r.resolve("alpha"); got != "stress/alpha" {
+		t.Errorf("bare basename resolved to %q, want stress/alpha (bare links still use basename)", got)
+	}
+	// With stress/index gone, the path-qualified link must NOT silently fall back
+	// to the root page that merely shares its basename; it is broken.
+	gone := newLinkResolver([]PageMeta{{Slug: "index"}, {Slug: "stress/alpha"}})
+	if got := gone.resolve("stress/index"); got != "" {
+		t.Errorf("deleted path link resolved to %q, want empty (broken)", got)
+	}
+}
+
 func seed(t *testing.T) *Store {
 	t.Helper()
 	s, err := New(t.TempDir())

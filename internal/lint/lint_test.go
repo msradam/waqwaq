@@ -2,8 +2,17 @@ package lint
 
 import "testing"
 
+// knows builds a resolves predicate that accepts exactly the given targets.
+func knows(targets ...string) func(string) bool {
+	set := make(map[string]bool, len(targets))
+	for _, t := range targets {
+		set[t] = true
+	}
+	return func(t string) bool { return set[t] }
+}
+
 func TestMissingTitleIsError(t *testing.T) {
-	issues := Check(map[string]any{}, "# Body\n", map[string]bool{}, Rules{})
+	issues := Check(map[string]any{}, "# Body\n", knows(), Rules{})
 	if !HasErrors(issues) {
 		t.Fatalf("expected an error for missing title, got %v", issues)
 	}
@@ -11,7 +20,7 @@ func TestMissingTitleIsError(t *testing.T) {
 
 func TestValidPageHasNoIssues(t *testing.T) {
 	fm := map[string]any{"title": "Hello"}
-	issues := Check(fm, "see [[known]]\n", map[string]bool{"known": true}, Rules{})
+	issues := Check(fm, "see [[known]]\n", knows("known"), Rules{})
 	if len(issues) != 0 {
 		t.Fatalf("expected no issues, got %v", issues)
 	}
@@ -19,7 +28,7 @@ func TestValidPageHasNoIssues(t *testing.T) {
 
 func TestBrokenWikilinkIsWarning(t *testing.T) {
 	fm := map[string]any{"title": "Hello"}
-	issues := Check(fm, "see [[ghost]] and [[ghost|alias]]\n", map[string]bool{}, Rules{})
+	issues := Check(fm, "see [[ghost]] and [[ghost|alias]]\n", knows(), Rules{})
 	if HasErrors(issues) {
 		t.Fatalf("a broken link should warn, not error: %v", issues)
 	}
@@ -31,11 +40,11 @@ func TestBrokenWikilinkIsWarning(t *testing.T) {
 func TestRequiredFrontmatterField(t *testing.T) {
 	rules := Rules{RequireFrontmatter: []string{"owner"}}
 	fm := map[string]any{"title": "Hello"}
-	if !HasErrors(Check(fm, "", map[string]bool{}, rules)) {
+	if !HasErrors(Check(fm, "", knows(), rules)) {
 		t.Fatal("missing required field should error")
 	}
 	fm["owner"] = "adam"
-	if HasErrors(Check(fm, "", map[string]bool{}, rules)) {
+	if HasErrors(Check(fm, "", knows(), rules)) {
 		t.Fatal("present required field should not error")
 	}
 }
@@ -43,11 +52,11 @@ func TestRequiredFrontmatterField(t *testing.T) {
 func TestBannedTerm(t *testing.T) {
 	rules := Rules{BannedTerms: []BannedTerm{{Term: "lorem ipsum", Message: "no placeholder text", Severity: "error"}}}
 	fm := map[string]any{"title": "Hello"}
-	issues := Check(fm, "this has Lorem Ipsum in it\n", map[string]bool{}, rules)
+	issues := Check(fm, "this has Lorem Ipsum in it\n", knows(), rules)
 	if !HasErrors(issues) {
 		t.Fatalf("banned term (error severity, case-insensitive) should error: %v", issues)
 	}
-	if HasErrors(Check(fm, "clean body\n", map[string]bool{}, rules)) {
+	if HasErrors(Check(fm, "clean body\n", knows(), rules)) {
 		t.Fatal("clean body should not trigger banned term")
 	}
 }

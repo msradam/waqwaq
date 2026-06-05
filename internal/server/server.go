@@ -729,8 +729,8 @@ func (s *Server) handleEdit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		fm, body := store.SplitFrontmatter(content)
-		known, _ := s.store.KnownSlugs()
-		if issues := lint.Check(fm, body, known, s.rules); lint.HasErrors(issues) {
+		resolves, _ := s.store.LinkChecker()
+		if issues := lint.Check(fm, body, resolves, s.rules); lint.HasErrors(issues) {
 			s.exec(w, "edit.html", editView{Chrome: s.chrome(r, slug, ""), Slug: slug, Content: content, Issues: issues})
 			return
 		}

@@ -687,16 +687,13 @@ func runCheck(st *store.Store, rules lint.Rules) []checkFinding {
 	if err != nil {
 		return out
 	}
-	known := make(map[string]bool, len(metas))
-	for _, m := range metas {
-		known[m.Slug] = true
-	}
+	resolves, _ := st.LinkChecker()
 	for _, m := range metas {
 		page, err := st.Read(m.Slug)
 		if err != nil {
 			continue
 		}
-		for _, is := range lint.Check(page.Frontmatter, page.Body, known, rules) {
+		for _, is := range lint.Check(page.Frontmatter, page.Body, resolves, rules) {
 			// Skip lint's wikilink warnings (the graph resolves links and Health
 			// reports the truly broken ones) and any title complaint (a page's
 			// title falls back to its H1 or filename, which every read surface uses).

@@ -9,6 +9,57 @@ import (
 	"testing"
 )
 
+func TestWriteIdenticalIsNoop(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.git {
+		t.Skip("git unavailable")
+	}
+	const c = "---\ntitle: T\n---\nbody\n"
+	if err := s.Write("p", c, "", "first"); err != nil {
+		t.Fatal(err)
+	}
+	revCount := func() string {
+		out, err := exec.Command("git", "-C", dir, "rev-list", "--count", "HEAD").Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	before := revCount()
+	if err := s.Write("p", c, "", "second"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Write("p", c, "", "third"); err != nil {
+		t.Fatal(err)
+	}
+	if after := revCount(); after != before {
+		t.Errorf("identical re-writes changed commit count %s -> %s", before, after)
+	}
+}
+
+func TestDeleteRaw(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddRaw("note.md", []byte("hi")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteRaw("note.md"); err != nil {
+		t.Fatalf("DeleteRaw: %v", err)
+	}
+	if _, err := s.ReadRaw("note.md"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("raw doc still readable after delete: %v", err)
+	}
+	if err := s.DeleteRaw("gone.md"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("DeleteRaw of a missing doc = %v, want ErrNotExist", err)
+	}
+}
+
 func TestDeleteUntrackedIsRecoverable(t *testing.T) {
 	dir := t.TempDir()
 	s, err := New(dir)

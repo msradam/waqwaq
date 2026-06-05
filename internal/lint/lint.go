@@ -28,9 +28,11 @@ type BannedTerm struct {
 
 var wikiLink = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 
-// Check validates a page's frontmatter and body against the known page set and
-// the configured rules.
-func Check(frontmatter map[string]any, body string, knownSlugs map[string]bool, rules Rules) []Issue {
+// Check validates a page's frontmatter and body against the configured rules.
+// resolves reports whether a wikilink target is fine, using the store's tolerant
+// resolution so lint agrees with the link graph (case, spaces, basename); pass
+// nil to treat every link as resolving.
+func Check(frontmatter map[string]any, body string, resolves func(string) bool, rules Rules) []Issue {
 	var issues []Issue
 
 	switch t := frontmatter["title"].(type) {
@@ -75,21 +77,21 @@ func Check(frontmatter map[string]any, body string, knownSlugs map[string]bool, 
 	seen := map[string]bool{}
 	unresolved := 0
 	for _, m := range wikiLink.FindAllStringSubmatch(stripCode(body), -1) {
-		target := m[1]
-		if i := strings.IndexAny(target, "|#"); i >= 0 {
-			target = target[:i]
+		raw := strings.TrimSpace(m[1])
+		display := raw
+		if i := strings.IndexAny(display, "|#"); i >= 0 {
+			display = strings.TrimSpace(display[:i])
 		}
-		target = strings.TrimSpace(target)
-		if target == "" || seen[target] {
+		if display == "" || seen[display] {
 			continue
 		}
-		seen[target] = true
-		if knownSlugs[target] {
+		seen[display] = true
+		if resolves == nil || resolves(raw) {
 			continue
 		}
 		unresolved++
 		if unresolved <= maxLinkWarnings {
-			issues = append(issues, Issue{"warning", "wikilink [[" + target + "]] does not resolve to a known page"})
+			issues = append(issues, Issue{"warning", "wikilink [[" + display + "]] does not resolve to a known page"})
 		}
 	}
 	if unresolved > maxLinkWarnings {

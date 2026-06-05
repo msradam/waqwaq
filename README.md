@@ -71,7 +71,7 @@ Diagnostics: `waqwaq doctor [dir]` checks setup and the MCP/access posture; `waq
 - Read: `wiki_list`, `wiki_read`, `wiki_search`, `wiki_graph`.
 - Navigate by relationship: `wiki_hubs`, `wiki_neighbors`, `wiki_path`, `wiki_backlinks`.
 - Maintain: `wiki_health`, `wiki_recent`, `wiki_history`, `wiki_tags`.
-- Raw documents: `wiki_list_raw`, `wiki_read_raw`, `wiki_ingest`.
+- Raw documents: `wiki_list_raw`, `wiki_read_raw`, `wiki_ingest`, `wiki_delete_raw`.
 - Review and write: `wiki_list_proposals`, `wiki_lint`, `wiki_write` and `wiki_delete` (each returns `committed`, `proposed`, or `rejected`).
 
 Read tools are always available; the write tools are exposed only when the server is not read-only. `wiki_write` and `wiki_delete` follow the same access model: a trusted caller commits to git directly, anyone else (or `--review`) queues a proposal. A delete stays recoverable from git history.
