@@ -22,8 +22,6 @@ import (
 	"github.com/msradam/waqwaq/internal/version"
 )
 
-const defaultInstructionsPreamble = "This is a git-backed markdown wiki: pages that humans browse and agents maintain."
-
 const baseInstructionsSuffix = `
 Read with wiki_list (page through large wikis with prefix and offset), wiki_read, wiki_search, and wiki_graph (the page link graph).
 wiki_tags lists every tag with a count; pass a tag to get its pages.
@@ -33,9 +31,6 @@ Raw documents to synthesise from live under raw/: list them with wiki_list_raw, 
 Create or replace pages with wiki_write. Each page needs YAML frontmatter with a title, and links other pages with [[slug]] or [[slug|label]] wikilinks. Remove a page with wiki_delete (recoverable from git history).
 wiki_lint dry-runs the checks. A missing title blocks a write; unresolved wikilinks are warnings.
 Depending on your access, a write either commits straight to git or is queued as a proposal for a human to approve. Check the status field returned by wiki_write, and list the queue with wiki_list_proposals.`
-
-// baseInstructions kept for compatibility with tests that reference it directly.
-const baseInstructions = defaultInstructionsPreamble + baseInstructionsSuffix
 
 type Options struct {
 	ReadOnly    bool
