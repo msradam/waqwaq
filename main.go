@@ -424,12 +424,23 @@ func cmdExport(args []string) {
 
 	copyDir(filepath.Join(st.Root(), "assets"), filepath.Join(out, "assets"))
 	if sfs, err := server.StaticFS(); err == nil {
-		_ = os.MkdirAll(filepath.Join(out, "static"), 0o755)
-		for _, name := range []string{"style.css", "favicon.svg"} {
-			if data, err := fs.ReadFile(sfs, name); err == nil {
-				_ = os.WriteFile(filepath.Join(out, "static", name), data, 0o644)
+		// The whole embedded static tree: stylesheet, favicon, and the
+		// self-hosted fonts the stylesheet references.
+		_ = fs.WalkDir(sfs, ".", func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
 			}
-		}
+			data, err := fs.ReadFile(sfs, p)
+			if err != nil {
+				return nil
+			}
+			dest := filepath.Join(out, "static", filepath.FromSlash(p))
+			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+				return nil
+			}
+			_ = os.WriteFile(dest, data, 0o644)
+			return nil
+		})
 	}
 	fmt.Printf("Exported %d pages to %s\n", len(metas), out)
 	fmt.Printf("Serve it with any static file server, e.g. python3 -m http.server -d %s\n", out)

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"unicode"
 
+	chromahtml "github.com/alecthomas/chroma/v2/formatters/html"
 	"github.com/yuin/goldmark"
 	highlighting "github.com/yuin/goldmark-highlighting/v2"
 	"github.com/yuin/goldmark/ast"
@@ -39,7 +40,9 @@ func New(base string) *Renderer {
 	md := goldmark.New(
 		goldmark.WithExtensions(
 			extension.GFM,
-			highlighting.NewHighlighting(highlighting.WithStyle("github")),
+			// Classes instead of inline styles, so the stylesheet can theme
+			// code for both the paper and ink stocks.
+			highlighting.NewHighlighting(highlighting.WithFormatOptions(chromahtml.WithClasses(true))),
 			&mermaid.Extender{RenderMode: mermaid.RenderModeClient, NoScript: true},
 			&wikilink.Extender{Resolver: wikiResolver{base: base}},
 			&anchor.Extender{},
