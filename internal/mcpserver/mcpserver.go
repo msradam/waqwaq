@@ -46,6 +46,15 @@ type pageRef struct {
 	Title string `json:"title"`
 }
 
+// orEmpty returns a non-nil slice, so an empty MCP result serializes as []
+// rather than null and a client never has to special-case the two.
+func orEmpty[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
+}
+
 // ServeStdio runs an MCP server over stdin/stdout, the transport agents use to
 // launch a local MCP server as a subprocess. It blocks until the client closes
 // the connection. Nothing may be written to stdout except the protocol.
@@ -146,7 +155,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		if truncated {
 			hits = hits[:store.SearchLimit]
 		}
-		return nil, searchOut{Hits: hits, Truncated: truncated}, nil
+		return nil, searchOut{Hits: orEmpty(hits), Truncated: truncated}, nil
 	})
 
 	type graphIn struct {
@@ -170,7 +179,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		if err != nil {
 			return nil, graphOut{}, err
 		}
-		out := graphOut{Edges: g.Edges, Truncated: g.Truncated, Total: g.Total}
+		out := graphOut{Pages: []pageRef{}, Edges: orEmpty(g.Edges), Truncated: g.Truncated, Total: g.Total}
 		for _, n := range g.Nodes {
 			out.Pages = append(out.Pages, pageRef{Slug: n.Slug, Title: n.Title})
 		}
@@ -188,7 +197,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		if err != nil {
 			return nil, rawListOut{}, err
 		}
-		return nil, rawListOut{Documents: names}, nil
+		return nil, rawListOut{Documents: orEmpty(names)}, nil
 	})
 
 	type rawReadIn struct {
@@ -226,7 +235,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		}
 		fm, body := store.SplitFrontmatter(in.Content)
 		issues := lint.Check(fm, body, resolves, opts.Rules)
-		return nil, lintOut{Issues: issues, OK: !lint.HasErrors(issues)}, nil
+		return nil, lintOut{Issues: orEmpty(issues), OK: !lint.HasErrors(issues)}, nil
 	})
 
 	type proposalRef struct {
@@ -249,7 +258,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		if err != nil {
 			return nil, listProposalsOut{}, err
 		}
-		out := listProposalsOut{}
+		out := listProposalsOut{Proposals: []proposalRef{}}
 		for _, p := range ps {
 			out.Proposals = append(out.Proposals, proposalRef{
 				ID: p.ID, Slug: p.Slug, Title: p.Title, Author: p.Author,
@@ -271,7 +280,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		if err != nil {
 			return nil, listOut{}, err
 		}
-		out := listOut{}
+		out := listOut{Pages: []pageRef{}}
 		for _, m := range metas {
 			out.Pages = append(out.Pages, pageRef{Slug: m.Slug, Title: m.Title})
 		}
@@ -297,7 +306,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		if err != nil {
 			return nil, neighborsOut{}, err
 		}
-		return nil, neighborsOut{Neighbors: nb}, nil
+		return nil, neighborsOut{Neighbors: orEmpty(nb)}, nil
 	})
 
 	type pathIn struct {
@@ -315,7 +324,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		if err != nil {
 			return nil, pathOut{}, err
 		}
-		out := pathOut{}
+		out := pathOut{Path: []pageRef{}}
 		for _, m := range metas {
 			out.Path = append(out.Path, pageRef{Slug: m.Slug, Title: m.Title})
 		}
@@ -340,7 +349,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		if err != nil {
 			return nil, hubsOut{}, err
 		}
-		return nil, hubsOut{Hubs: hubs}, nil
+		return nil, hubsOut{Hubs: orEmpty(hubs)}, nil
 	})
 
 	type healthOut struct {
@@ -356,7 +365,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		if err != nil {
 			return nil, healthOut{}, err
 		}
-		out := healthOut{Broken: h.Broken, Stale: h.Stale}
+		out := healthOut{Orphans: []pageRef{}, Broken: orEmpty(h.Broken), Stale: orEmpty(h.Stale)}
 		for _, o := range h.Orphans {
 			out.Orphans = append(out.Orphans, pageRef{Slug: o.Slug, Title: o.Title})
 		}
@@ -381,7 +390,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		if err != nil {
 			return nil, recentOut{}, err
 		}
-		return nil, recentOut{Changes: changes}, nil
+		return nil, recentOut{Changes: orEmpty(changes)}, nil
 	})
 
 	type historyOut struct {
@@ -395,7 +404,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		if err != nil {
 			return nil, historyOut{}, err
 		}
-		return nil, historyOut{Revisions: revs}, nil
+		return nil, historyOut{Revisions: orEmpty(revs)}, nil
 	})
 
 	type tagsIn struct {
@@ -461,7 +470,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 			return nil, writeOut{}, err
 		}
 		fm, body := store.SplitFrontmatter(in.Content)
-		issues := lint.Check(fm, body, resolves, opts.Rules)
+		issues := orEmpty(lint.Check(fm, body, resolves, opts.Rules))
 		if lint.HasErrors(issues) {
 			return &mcp.CallToolResult{IsError: true}, writeOut{Status: "rejected", Issues: issues}, nil
 		}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -160,5 +161,31 @@ func TestWikiTagsCountsAndDrillDown(t *testing.T) {
 	callJSON(t, cs, "wiki_tags", map[string]any{"tag": "nope"}, &unknown)
 	if unknown.Pages == nil || len(unknown.Pages) != 0 {
 		t.Fatalf("unknown tag pages: %+v", unknown.Pages)
+	}
+}
+
+func TestEmptyResultsSerializeAsArrays(t *testing.T) {
+	cs := testSession(t, map[string]string{
+		"index": "---\ntitle: Index\n---\n\n# Index\n\nNo links here.\n",
+	})
+	for tool, args := range map[string]map[string]any{
+		"wiki_health":    nil,
+		"wiki_backlinks": {"slug": "index"},
+		"wiki_neighbors": {"slug": "index"},
+		"wiki_hubs":      nil,
+		"wiki_list_raw":  nil,
+		"wiki_search":    {"query": "nosuchwordanywhere"},
+	} {
+		res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: tool, Arguments: args})
+		if err != nil || res.IsError {
+			t.Fatalf("%s: err=%v isError=%v", tool, err, res != nil && res.IsError)
+		}
+		raw, err := json.Marshal(res.StructuredContent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), "null") {
+			t.Errorf("%s emits null for an empty list: %s", tool, raw)
+		}
 	}
 }
