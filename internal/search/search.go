@@ -3,9 +3,7 @@
 package search
 
 import (
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,7 +46,7 @@ func New(st *store.Store) (*Index, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS pagemeta(slug TEXT PRIMARY KEY, fp TEXT)`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS pagemeta(slug TEXT PRIMARY KEY, fp TEXT, rid INTEGER)`); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -59,30 +57,22 @@ func New(st *store.Store) (*Index, error) {
 	return ix, nil
 }
 
-// openIndexDB opens the persistent index in the OS cache directory (a derived
-// cache, not part of the user's repo). It falls back to an in-memory database if
-// the cache directory is unavailable or the on-disk file cannot be opened, so
-// search always works even when persistence does not.
+// openIndexDB opens the persistent index in the wiki's cache directory (a
+// derived cache, not part of the user's repo). It falls back to an in-memory
+// database if the cache directory is unavailable or the on-disk file cannot be
+// opened, so search always works even when persistence does not.
 func openIndexDB(st *store.Store) (db *sql.DB, persisted bool, err error) {
-	cache, cerr := os.UserCacheDir()
-	if cerr == nil {
-		// Resolve symlinks so every path form of the same physical wiki keys one
-		// index (notably /tmp vs /private/tmp on macOS), letting serve and mcp
-		// share the cache regardless of how the directory was named.
-		root := st.Root()
-		if resolved, rerr := filepath.EvalSymlinks(root); rerr == nil {
-			root = resolved
+	if dir, cerr := st.CacheDir(); cerr == nil {
+		// search-v2 in the name lets a schema change use a fresh file; v1 (which
+		// had no rowid column in pagemeta) is removed rather than left to rot.
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			_ = os.Remove(filepath.Join(dir, "search-v1.db"+suffix))
 		}
-		key := sha256.Sum256([]byte(root))
-		dir := filepath.Join(cache, "waqwaq", hex.EncodeToString(key[:8]))
-		if os.MkdirAll(dir, 0o755) == nil {
-			// search-v1 in the name lets a future schema change use a fresh file.
-			if d, derr := sql.Open("sqlite", filepath.Join(dir, "search-v1.db")); derr == nil {
-				if d.Ping() == nil {
-					return d, true, nil
-				}
-				_ = d.Close()
+		if d, derr := sql.Open("sqlite", filepath.Join(dir, "search-v2.db")); derr == nil {
+			if d.Ping() == nil {
+				return d, true, nil
 			}
+			_ = d.Close()
 		}
 	}
 	d, derr := sql.Open("sqlite", ":memory:")
@@ -158,7 +148,11 @@ func (ix *Index) refresh() error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	del, err := tx.Prepare(`DELETE FROM pages WHERE slug = ?`)
+	// Deleting an FTS5 row by column value full-scans the virtual table, which
+	// made refreshes O(N²) in the page count (a cold 20k-page build took
+	// minutes). Deletes go by rowid instead, tracked in pagemeta and read back
+	// inside the transaction so a concurrent indexer's rows are still seen.
+	del, err := tx.Prepare(`DELETE FROM pages WHERE rowid = ?`)
 	if err != nil {
 		return err
 	}
@@ -168,7 +162,7 @@ func (ix *Index) refresh() error {
 		return err
 	}
 	defer ins.Close()
-	setMeta, err := tx.Prepare(`INSERT INTO pagemeta(slug, fp) VALUES(?, ?) ON CONFLICT(slug) DO UPDATE SET fp = excluded.fp`)
+	setMeta, err := tx.Prepare(`INSERT INTO pagemeta(slug, fp, rid) VALUES(?, ?, ?) ON CONFLICT(slug) DO UPDATE SET fp = excluded.fp, rid = excluded.rid`)
 	if err != nil {
 		return err
 	}
@@ -178,27 +172,39 @@ func (ix *Index) refresh() error {
 		return err
 	}
 	defer delMeta.Close()
+	indexed, err := indexedRows(tx)
+	if err != nil {
+		return err
+	}
 	for slug, fp := range fps {
-		if ix.fps[slug] == fp {
+		rid, ok := indexed[slug]
+		if ok && ix.fps[slug] == fp {
 			continue
 		}
 		page, err := ix.st.Read(slug)
 		if err != nil {
 			continue
 		}
-		if _, err := del.Exec(slug); err != nil {
+		if ok {
+			if _, err := del.Exec(rid); err != nil {
+				return err
+			}
+		}
+		res, err := ins.Exec(slug, page.Title, page.Body)
+		if err != nil {
 			return err
 		}
-		if _, err := ins.Exec(slug, page.Title, page.Body); err != nil {
+		newRid, err := res.LastInsertId()
+		if err != nil {
 			return err
 		}
-		if _, err := setMeta.Exec(slug, fp); err != nil {
+		if _, err := setMeta.Exec(slug, fp, newRid); err != nil {
 			return err
 		}
 	}
-	for slug := range ix.fps {
+	for slug, rid := range indexed {
 		if _, ok := fps[slug]; !ok {
-			if _, err := del.Exec(slug); err != nil {
+			if _, err := del.Exec(rid); err != nil {
 				return err
 			}
 			if _, err := delMeta.Exec(slug); err != nil {
@@ -212,6 +218,27 @@ func (ix *Index) refresh() error {
 	ix.sig = sig
 	ix.fps = fps
 	return nil
+}
+
+// indexedRows maps each indexed slug to the rowid of its pages row.
+func indexedRows(tx *sql.Tx) (map[string]int64, error) {
+	rows, err := tx.Query(`SELECT slug, rid FROM pagemeta`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	indexed := make(map[string]int64)
+	for rows.Next() {
+		var slug string
+		var rid sql.NullInt64
+		if err := rows.Scan(&slug, &rid); err != nil {
+			return nil, err
+		}
+		if rid.Valid {
+			indexed[slug] = rid.Int64
+		}
+	}
+	return indexed, rows.Err()
 }
 
 // buildMatch turns free text into a safe FTS5 prefix-AND query. It splits on any
