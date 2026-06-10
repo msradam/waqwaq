@@ -19,6 +19,7 @@ import (
 	"github.com/msradam/waqwaq/internal/review"
 	"github.com/msradam/waqwaq/internal/search"
 	"github.com/msradam/waqwaq/internal/store"
+	"github.com/msradam/waqwaq/internal/version"
 )
 
 const baseInstructions = `This is a Waqwaq wiki: git-backed markdown pages that humans browse and agents maintain.
@@ -69,7 +70,7 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 	}
 
 	s := mcp.NewServer(
-		&mcp.Implementation{Name: "waqwaq", Title: "Waqwaq wiki", Version: "0.4.0"},
+		&mcp.Implementation{Name: "waqwaq", Title: "Waqwaq wiki", Version: version.Version},
 		&mcp.ServerOptions{Instructions: instructions},
 	)
 

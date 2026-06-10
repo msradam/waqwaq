@@ -39,9 +39,10 @@ import (
 	"github.com/msradam/waqwaq/internal/server"
 	"github.com/msradam/waqwaq/internal/store"
 	"github.com/msradam/waqwaq/internal/tui"
+	versionpkg "github.com/msradam/waqwaq/internal/version"
 )
 
-const version = "0.5.0"
+const version = versionpkg.Version
 
 func main() {
 	log.SetFlags(0)
