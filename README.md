@@ -92,14 +92,14 @@ Optional settings live in `<dir>/.waqwaq/config.json`, all fields optional:
 
 ```json
 {
-  "title": "My Wiki", "accent": "#7b2ff7", "theme": "auto",
+  "title": "My Wiki", "accent": "madder", "theme": "manuscript",
   "webhook": "https://hooks.slack.com/services/XXX",
   "web": { "proxy_header": "X-Forwarded-User", "default_role": "viewer", "admins": ["adam"], "editors": ["dev"] },
   "lint": { "require_frontmatter": ["owner"], "banned_terms": [ { "term": "TODO", "severity": "warning" } ] }
 }
 ```
 
-`accent` and `theme` (`auto`/`light`/`dark`) style the UI; `webhook` receives a Slack-compatible JSON POST when a write is queued; `lint.require_frontmatter` and `lint.banned_terms` block non-conforming writes. A `<dir>/.waqwaq/custom.css` overrides the built-in styles, and markdown files in `<dir>/.waqwaq/templates/` become new-page starting points.
+The UI uses the [Lokta](https://github.com/msradam/lokta) design system. `theme` picks a stock: `auto` (default, paper by day and ink by night), the light stocks `paper`, `manuscript`, `bone`, `slate-light`, `steel-light`, `onyx-light`, and the dark stocks `ink`, `indigo`, `highland`, `pine`, `mulberry`, `slate`, `steel`, `onyx` (`light` and `dark` are aliases for paper and ink). `accent` recolors the spine and highlights: a lokta pigment name (`marigold` is the default; `peach`, `lavender`, `madder`, `walnut`, `turmeric`, `lac`, `aubergine`, `cinnabar`, `celadon`, `indigo`, or the `-light` variants `madder-light`, `walnut-light`, `turmeric-light`, `lac-light` for dark stocks) or any CSS color. `webhook` receives a Slack-compatible JSON POST when a write is queued; `lint.require_frontmatter` and `lint.banned_terms` block non-conforming writes. A `<dir>/.waqwaq/custom.css` overrides the built-in styles, and markdown files in `<dir>/.waqwaq/templates/` become new-page starting points.
 
 ### Access control
 

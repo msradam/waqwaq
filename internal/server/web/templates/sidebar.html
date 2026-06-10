@@ -2,7 +2,7 @@
 <meta name="color-scheme" content="light dark">
 <link rel="icon" type="image/svg+xml" href="{{.Base}}/static/favicon.svg">
 <link rel="stylesheet" href="{{.Base}}/static/style.css">
-{{if .Accent}}<style>:root{ --accent: {{.Accent}}; }</style>{{end}}
+{{if .Accent}}<style>:root{ --accent: {{.Accent}};{{if .AccentText}} --text-on-accent: {{.AccentText}};{{end}} }</style>{{end}}
 {{if .CustomCSS}}<link rel="stylesheet" href="{{.Base}}/custom.css">{{end}}
 {{end}}
 

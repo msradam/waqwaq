@@ -37,11 +37,14 @@ import (
 
 const operatorName = "operator"
 
-// Site holds the configurable appearance of the wiki.
+// Site holds the configurable appearance of the wiki. Accent is a resolved
+// CSS color; AccentText optionally overrides the on-accent text color (set for
+// dark pigments that need light text).
 type Site struct {
-	Title  string
-	Accent string
-	Theme  string
+	Title      string
+	Accent     string
+	AccentText string
+	Theme      string
 }
 
 // WebPolicy configures web-UI access. When ProxyHeader is set, identity is read
@@ -82,23 +85,24 @@ func parseRole(s string) Role {
 }
 
 type Server struct {
-	store     *store.Store
-	renderer  *render.Renderer
-	tmpl      *template.Template
-	mcp       *mcp.Server
-	auth      *auth.Registry
-	queue     *review.Queue
-	search    search.Searcher
-	rules     lint.Rules
-	web       WebPolicy
-	readOnly  bool
-	title     string
-	accent    string
-	theme     string
-	customCSS string    // path to .waqwaq/custom.css, or "" if absent
-	base      string    // URL base path: "" single-wiki, "/w/<name>" in farm mode
-	wikis     []WikiRef // all wikis, for the farm switcher (empty when single)
-	secret    []byte    // per-run secret for signing session cookies
+	store      *store.Store
+	renderer   *render.Renderer
+	tmpl       *template.Template
+	mcp        *mcp.Server
+	auth       *auth.Registry
+	queue      *review.Queue
+	search     search.Searcher
+	rules      lint.Rules
+	web        WebPolicy
+	readOnly   bool
+	title      string
+	accent     string
+	accentText string
+	theme      string
+	customCSS  string    // path to .waqwaq/custom.css, or "" if absent
+	base       string    // URL base path: "" single-wiki, "/w/<name>" in farm mode
+	wikis      []WikiRef // all wikis, for the farm switcher (empty when single)
+	secret     []byte    // per-run secret for signing session cookies
 
 	navMu    sync.Mutex // guards the cached undecorated sidebar tree below
 	navSig   string
@@ -154,7 +158,7 @@ func New(o Options) (*Server, error) {
 	return &Server{
 		store: o.Store, renderer: o.Renderer, tmpl: tmpl, mcp: o.MCP, auth: o.Auth, queue: o.Queue,
 		search: searcher, rules: o.Rules, web: o.Web, readOnly: o.ReadOnly,
-		title: title, accent: o.Site.Accent, theme: theme, customCSS: custom,
+		title: title, accent: o.Site.Accent, accentText: o.Site.AccentText, theme: theme, customCSS: custom,
 		base: o.Base, wikis: o.Wikis, secret: secret,
 	}, nil
 }
@@ -400,19 +404,20 @@ func (s *Server) authWrap(next http.Handler) http.Handler {
 }
 
 type chrome struct {
-	Nav       []*navNode
-	Pending   int
-	Query     string
-	Active    string
-	ReadOnly  bool
-	CanEdit   bool
-	SiteTitle string
-	Accent    string
-	Theme     string
-	CustomCSS bool
-	Base      string
-	Wikis     []WikiRef
-	Logout    bool
+	Nav        []*navNode
+	Pending    int
+	Query      string
+	Active     string
+	ReadOnly   bool
+	CanEdit    bool
+	SiteTitle  string
+	Accent     string
+	AccentText string
+	Theme      string
+	CustomCSS  bool
+	Base       string
+	Wikis      []WikiRef
+	Logout     bool
 }
 
 func (s *Server) chrome(r *http.Request, active, query string) chrome {
@@ -421,7 +426,7 @@ func (s *Server) chrome(r *http.Request, active, query string) chrome {
 	return chrome{
 		Nav: nav, Pending: pending, Query: query, Active: active,
 		ReadOnly: s.readOnly, CanEdit: !s.readOnly && s.role(r) >= RoleEditor,
-		SiteTitle: s.title, Accent: s.accent, Theme: s.theme, CustomCSS: s.customCSS != "",
+		SiteTitle: s.title, Accent: s.accent, AccentText: s.accentText, Theme: s.theme, CustomCSS: s.customCSS != "",
 		Base: s.base, Wikis: s.wikis, Logout: len(s.web.Users) > 0,
 	}
 }

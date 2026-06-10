@@ -65,95 +65,195 @@
   --max: 720px;
 }
 
-/* ─── Semantic: paper stock (default) ─── */
+/* ─── Stocks. Each re-points the semantic layer; values from the lokta token
+   set (AA-validated there). theme in .waqwaq/config.json picks one; light and
+   dark are aliases for paper and ink; auto follows the system. ─── */
+
+/* Paper, warm cream (default). */
 :root, :root[data-theme="paper"], :root[data-theme="light"] {
   --surface-page:   var(--paper-01);
   --surface-raised: var(--paper-00);
   --surface-sunken: var(--paper-02);
   --surface-inset:  var(--paper-03);
-
   --text-primary:   var(--ink-90);
   --text-body:      var(--ink-80);
   --text-secondary: var(--ink-60);
   --text-muted:     var(--ink-50);
   --text-on-accent: var(--ink-90);
   --text-on-fill:   var(--paper-00);
-
   --border-strong:   var(--ink-80);
   --border-default:  var(--ink-40);
   --border-hairline: var(--ink-20);
-
   --accent-success: var(--pigment-celadon-ink);
   --accent-danger:  var(--pigment-cinnabar-ink);
-
   --field-bg: var(--paper-00);
   --field-border: var(--ink-80);
   --focus-ring: var(--ink-100);
-
-  --add-bg: color-mix(in srgb, var(--pigment-celadon) 18%, var(--paper-01));
-  --del-bg: color-mix(in srgb, var(--pigment-cinnabar) 14%, var(--paper-01));
-  --warn-bg: color-mix(in srgb, var(--pigment-marigold) 22%, var(--paper-01));
 }
 
-/* ─── Semantic: ink stock (dark) ─── */
+/* Manuscript, aged-lokta ivory. */
+:root[data-theme="manuscript"] {
+  --surface-page: #EDE4D1; --surface-raised: #F5EEDD; --surface-sunken: #E2D8C0; --surface-inset: #D5CAAF;
+  --text-primary: #1F1C13; --text-body: #2A2620; --text-secondary: #524D43; --text-muted: #564F42;
+  --text-on-accent: var(--ink-90); --text-on-fill: #FAF8EA;
+  --border-strong: #2A2620; --border-default: #A89B7E; --border-hairline: #CFC4A6;
+  --accent-success: #355A42; --accent-danger: #8E3B30;
+  --field-bg: #F5EEDD; --field-border: #2A2620; --focus-ring: #1F1C13;
+}
+
+/* Bone, cool neutral near-white. */
+:root[data-theme="bone"] {
+  --surface-page: #EFEEE7; --surface-raised: #F7F6F1; --surface-sunken: #E4E3DB; --surface-inset: #D8D7CE;
+  --text-primary: var(--ink-90); --text-body: var(--ink-80); --text-secondary: var(--ink-60); --text-muted: var(--ink-50);
+  --text-on-accent: var(--ink-90); --text-on-fill: #F7F6F1;
+  --border-strong: var(--ink-80); --border-default: var(--ink-40); --border-hairline: var(--ink-20);
+  --accent-success: var(--pigment-celadon-ink); --accent-danger: var(--pigment-cinnabar-ink);
+  --field-bg: #F7F6F1; --field-border: var(--ink-80); --focus-ring: var(--ink-100);
+}
+
+/* Slate-light, steel-light, onyx-light: the enterprise light stocks. */
+:root[data-theme="slate-light"] {
+  --surface-page: #EDEEF1; --surface-raised: #F6F7F9; --surface-sunken: #E2E4E9; --surface-inset: #D8DAE0;
+  --text-primary: #1A1D23; --text-body: #272A30; --text-secondary: #515761; --text-muted: #555A63;
+  --text-on-accent: #1A1D23; --text-on-fill: #FAF8EA;
+  --border-strong: #272A30; --border-default: #9097A0; --border-hairline: #C3C7CE;
+  --accent-success: #4F6B50; --accent-danger: #C23A26;
+  --field-bg: #F6F7F9; --field-border: #1A1D23; --focus-ring: #1A1D23;
+}
+:root[data-theme="steel-light"] {
+  --surface-page: #E7EEED; --surface-raised: #F2F7F6; --surface-sunken: #DBE6E4; --surface-inset: #D0DEDC;
+  --text-primary: #14201F; --text-body: #232E2D; --text-secondary: #4B5958; --text-muted: #4F5B5A;
+  --text-on-accent: #14201F; --text-on-fill: #FAF8EA;
+  --border-strong: #232E2D; --border-default: #8CA09E; --border-hairline: #BFD0CE;
+  --accent-success: #4F6B50; --accent-danger: #C23A26;
+  --field-bg: #F2F7F6; --field-border: #14201F; --focus-ring: #14201F;
+}
+:root[data-theme="onyx-light"] {
+  --surface-page: #ECECEE; --surface-raised: #F6F6F7; --surface-sunken: #E1E1E4; --surface-inset: #D6D6DA;
+  --text-primary: #1A1A1D; --text-body: #28282B; --text-secondary: #515156; --text-muted: #5D5D63;
+  --text-on-accent: #1A1A1D; --text-on-fill: #FAF8EA;
+  --border-strong: #28282B; --border-default: #909096; --border-hairline: #C3C3C8;
+  --accent-success: #4F6B50; --accent-danger: #C23A26;
+  --field-bg: #F6F6F7; --field-border: #1A1A1D; --focus-ring: #1A1A1D;
+}
+
+/* Ink, warm dark (the dark default). */
 :root[data-theme="ink"], :root[data-theme="dark"] {
   --surface-page:   var(--ink-90);
   --surface-raised: var(--ink-80);
   --surface-sunken: var(--ink-100);
   --surface-inset:  #26221A;
-
   --text-primary:   var(--paper-00);
   --text-body:      var(--paper-01);
   --text-secondary: var(--paper-04);
   --text-muted:     var(--ink-20);
   --text-on-accent: var(--ink-100);
   --text-on-fill:   var(--paper-00);
-
   --border-strong:   var(--paper-04);
   --border-default:  var(--ink-40);
   --border-hairline: var(--ink-60);
-
   --accent-success: #8FB088;
   --accent-danger:  #E2654F;
-
   --field-bg: var(--ink-100);
   --field-border: var(--paper-04);
   --focus-ring: var(--paper-00);
-
-  --add-bg: color-mix(in srgb, var(--pigment-celadon) 28%, var(--ink-90));
-  --del-bg: color-mix(in srgb, var(--pigment-cinnabar) 24%, var(--ink-90));
-  --warn-bg: color-mix(in srgb, var(--pigment-marigold) 20%, var(--ink-90));
 }
 
+/* Indigo, cool dark. */
+:root[data-theme="indigo"] {
+  --surface-page: #1B2230; --surface-raised: #232C3D; --surface-sunken: #141A25; --surface-inset: #2B3547;
+  --text-primary: #EDECE3; --text-body: #E2E1D6; --text-secondary: #AEB4C2; --text-muted: #9BA3B4;
+  --text-on-accent: var(--ink-100); --text-on-fill: #EDECE3;
+  --border-strong: #AEB4C2; --border-default: #4A5365; --border-hairline: #343E4F;
+  --accent-success: #8FB088; --accent-danger: #E2654F;
+  --field-bg: #141A25; --field-border: #4A5365; --focus-ring: #EDECE3;
+}
+
+/* Highland, stone-cool dark. */
+:root[data-theme="highland"] {
+  --surface-page: #232A2E; --surface-raised: #2C3438; --surface-sunken: #181D20; --surface-inset: #323B40;
+  --text-primary: #ECEAE0; --text-body: #DEDBCE; --text-secondary: #ADB2AE; --text-muted: #A2A7A3;
+  --text-on-accent: var(--ink-100); --text-on-fill: #ECEAE0;
+  --border-strong: #ADB2AE; --border-default: #4A5358; --border-hairline: #2E363B;
+  --accent-success: #7FB08C; --accent-danger: #DE9684;
+  --field-bg: #181D20; --field-border: #4A5358; --focus-ring: #ECEAE0;
+}
+
+/* Pine, deep green dark. */
+:root[data-theme="pine"] {
+  --surface-page: #16231C; --surface-raised: #1E2E25; --surface-sunken: #101A14; --surface-inset: #24382C;
+  --text-primary: #EEEFE6; --text-body: #E0E4D9; --text-secondary: #AFBBA8; --text-muted: #889184;
+  --text-on-accent: var(--ink-100); --text-on-fill: #EEEFE6;
+  --border-strong: #AFBBA8; --border-default: #495449; --border-hairline: #2E3A32;
+  --accent-success: #9DC08F; --accent-danger: #E2654F;
+  --field-bg: #101A14; --field-border: #495449; --focus-ring: #EEEFE6;
+}
+
+/* Mulberry, deep wine dark. */
+:root[data-theme="mulberry"] {
+  --surface-page: #241620; --surface-raised: #2E1E29; --surface-sunken: #1A0F16; --surface-inset: #382433;
+  --text-primary: #F0E9EC; --text-body: #E5DBDF; --text-secondary: #C0AEB7; --text-muted: #9A8791;
+  --text-on-accent: var(--ink-100); --text-on-fill: #F0E9EC;
+  --border-strong: #C0AEB7; --border-default: #574A52; --border-hairline: #3A2C35;
+  --accent-success: #8FB088; --accent-danger: #E2654F;
+  --field-bg: #1A0F16; --field-border: #574A52; --focus-ring: #F0E9EC;
+}
+
+/* Slate, steel, onyx: the enterprise dark stocks. */
+:root[data-theme="slate"] {
+  --surface-page: #21252C; --surface-raised: #2A2F38; --surface-sunken: #181C22; --surface-inset: #2B313A;
+  --text-primary: #ECEEF1; --text-body: #DDE0E4; --text-secondary: #B4B9C2; --text-muted: #9DA4AF;
+  --text-on-accent: var(--ink-100); --text-on-fill: #ECEEF1;
+  --border-strong: #B4B9C2; --border-default: #4A515C; --border-hairline: #343A44;
+  --accent-success: #8FB088; --accent-danger: #E2654F;
+  --field-bg: #181C22; --field-border: #4A515C; --focus-ring: #ECEEF1;
+}
+:root[data-theme="steel"] {
+  --surface-page: #16282B; --surface-raised: #1F3438; --surface-sunken: #0F1D20; --surface-inset: #21383C;
+  --text-primary: #E9EEED; --text-body: #D8E2E1; --text-secondary: #ABC0C0; --text-muted: #95ABAB;
+  --text-on-accent: var(--ink-100); --text-on-fill: #E9EEED;
+  --border-strong: #ABC0C0; --border-default: #3A5458; --border-hairline: #234044;
+  --accent-success: #8FB088; --accent-danger: #E2654F;
+  --field-bg: #0F1D20; --field-border: #3A5458; --focus-ring: #E9EEED;
+}
+:root[data-theme="onyx"] {
+  --surface-page: #1E1F22; --surface-raised: #27282C; --surface-sunken: #161719; --surface-inset: #2A2B30;
+  --text-primary: #ECECEE; --text-body: #DEDEE0; --text-secondary: #B2B2B7; --text-muted: #9C9CA2;
+  --text-on-accent: var(--ink-100); --text-on-fill: #ECECEE;
+  --border-strong: #B2B2B7; --border-default: #45464B; --border-hairline: #313237;
+  --accent-success: #8FB088; --accent-danger: #E2654F;
+  --field-bg: #161719; --field-border: #45464B; --focus-ring: #ECECEE;
+}
+
+/* Auto follows the system: paper by day, ink by night. */
 @media (prefers-color-scheme: dark) {
   :root[data-theme="auto"] {
     --surface-page:   var(--ink-90);
     --surface-raised: var(--ink-80);
     --surface-sunken: var(--ink-100);
     --surface-inset:  #26221A;
-
     --text-primary:   var(--paper-00);
     --text-body:      var(--paper-01);
     --text-secondary: var(--paper-04);
     --text-muted:     var(--ink-20);
     --text-on-accent: var(--ink-100);
     --text-on-fill:   var(--paper-00);
-
     --border-strong:   var(--paper-04);
     --border-default:  var(--ink-40);
     --border-hairline: var(--ink-60);
-
     --accent-success: #8FB088;
     --accent-danger:  #E2654F;
-
     --field-bg: var(--ink-100);
     --field-border: var(--paper-04);
     --focus-ring: var(--paper-00);
-
-    --add-bg: color-mix(in srgb, var(--pigment-celadon) 28%, var(--ink-90));
-    --del-bg: color-mix(in srgb, var(--pigment-cinnabar) 24%, var(--ink-90));
-    --warn-bg: color-mix(in srgb, var(--pigment-marigold) 20%, var(--ink-90));
   }
+}
+
+/* Diff and callout tints derive from whichever stock is active. */
+:root {
+  --add-bg: color-mix(in srgb, var(--pigment-celadon) 22%, var(--surface-page));
+  --del-bg: color-mix(in srgb, var(--pigment-cinnabar) 18%, var(--surface-page));
+  --warn-bg: color-mix(in srgb, var(--pigment-marigold) 20%, var(--surface-page));
 }
 
 * { box-sizing: border-box; }
@@ -363,20 +463,22 @@ h1, h2, h3, h4 { font-family: var(--font-display); color: var(--text-primary); l
 .markdown pre.mermaid { background: transparent; border: none; padding: 0; text-align: center; }
 
 /* Chroma syntax tokens (classes, not inline styles), in lokta pigments.
-   Both stocks re-point the four token roles; everything else inherits. */
-:root, :root[data-theme="paper"], :root[data-theme="light"] {
+   Light stocks take the *-ink palette; every dark stock re-points it. */
+:root {
   --code-keyword: #6B4E8E; /* aubergine-ink */
   --code-string:  #4F6B50; /* celadon-ink */
   --code-number:  #2E3E5C; /* indigo */
   --code-name:    #8E3B30; /* madder */
   --code-comment: var(--ink-50);
 }
-:root[data-theme="ink"], :root[data-theme="dark"] {
+:root[data-theme="ink"], :root[data-theme="dark"], :root[data-theme="indigo"],
+:root[data-theme="highland"], :root[data-theme="pine"], :root[data-theme="mulberry"],
+:root[data-theme="slate"], :root[data-theme="steel"], :root[data-theme="onyx"] {
   --code-keyword: #A98FC9;
   --code-string:  #8FB088;
   --code-number:  #D9B36A;
   --code-name:    #E2654F;
-  --code-comment: var(--ink-40);
+  --code-comment: var(--text-muted);
 }
 @media (prefers-color-scheme: dark) {
   :root[data-theme="auto"] {

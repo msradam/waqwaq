@@ -224,6 +224,13 @@ func cmdServe(args []string) {
 	_ = httpSrv.Shutdown(ctx)
 }
 
+// siteFor maps config appearance settings to the server's Site, resolving a
+// named lokta pigment accent to its color and on-accent text.
+func siteFor(cfg config.Config) server.Site {
+	color, textOn := config.ResolveAccent(cfg.Accent)
+	return server.Site{Title: cfg.Title, Accent: color, AccentText: textOn, Theme: cfg.Theme}
+}
+
 // buildWiki assembles one wiki's full stack for a data directory. base is "" for
 // a single wiki at the root, or "/w/<name>" in farm mode. The returned cleanup
 // closes the search index.
@@ -274,7 +281,7 @@ func buildWiki(dir, base string, readOnly, forceReview bool, tokensPath string, 
 		Store: st, Renderer: render.New(base), MCP: mcpSrv, Auth: reg, Queue: q, Search: searcher, Rules: cfg.Lint,
 		Web:      server.WebPolicy{ProxyHeader: cfg.Web.ProxyHeader, DefaultRole: cfg.Web.DefaultRole, Admins: cfg.Web.Admins, Editors: cfg.Web.Editors, Users: users},
 		ReadOnly: readOnly,
-		Site:     server.Site{Title: cfg.Title, Accent: cfg.Accent, Theme: cfg.Theme},
+		Site:     siteFor(cfg),
 		Base:     base,
 		Wikis:    wikis,
 	})
