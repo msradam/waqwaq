@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -22,7 +23,8 @@ import (
 
 const baseInstructions = `This is a Waqwaq wiki: git-backed markdown pages that humans browse and agents maintain.
 
-Read with wiki_list, wiki_read, wiki_search, and wiki_graph (the page link graph).
+Read with wiki_list (page through large wikis with prefix and offset), wiki_read, wiki_search, and wiki_graph (the page link graph).
+wiki_tags lists every tag with a count; pass a tag to get its pages.
 Navigate by relationship: wiki_hubs lists the most-connected pages to read first, wiki_neighbors pulls a page's linked neighbourhood in one call, wiki_path returns the chain connecting two pages, and wiki_backlinks lists what links to a page.
 Maintain the wiki with wiki_health (orphans, broken links, stale pages), wiki_recent (recent changes), wiki_history, and wiki_tags. Use wiki_health to find what needs fixing.
 Raw documents to synthesise from live under raw/: list them with wiki_list_raw, read with wiki_read_raw, add with wiki_ingest, remove with wiki_delete_raw.
@@ -70,18 +72,39 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 	type listOut struct {
 		Pages []pageRef `json:"pages"`
 	}
+	type listIn struct {
+		Prefix string `json:"prefix,omitempty" jsonschema:"only pages whose slug starts with this prefix, e.g. concepts/"`
+		Limit  int    `json:"limit,omitempty" jsonschema:"max pages to return (default 500)"`
+		Offset int    `json:"offset,omitempty" jsonschema:"skip this many matching pages, for paging"`
+	}
+	type listPagedOut struct {
+		Pages     []pageRef `json:"pages"`
+		Total     int       `json:"total" jsonschema:"how many pages match the prefix in the whole wiki"`
+		Truncated bool      `json:"truncated,omitempty"`
+	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "wiki_list",
-		Description: "List every wiki page with its slug and title.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, listOut, error) {
+		Description: "List wiki pages with slug and title, alphabetical by slug. Large wikis are paged: when truncated is true, total reports the full match count; narrow with prefix or page with offset.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in listIn) (*mcp.CallToolResult, listPagedOut, error) {
 		metas, err := st.List()
 		if err != nil {
-			return nil, listOut{}, err
+			return nil, listPagedOut{}, err
 		}
-		out := listOut{}
+		limit := in.Limit
+		if limit <= 0 {
+			limit = 500
+		}
+		out := listPagedOut{Pages: []pageRef{}}
 		for _, m := range metas {
-			out.Pages = append(out.Pages, pageRef{Slug: m.Slug, Title: m.Title})
+			if in.Prefix != "" && !strings.HasPrefix(m.Slug, in.Prefix) {
+				continue
+			}
+			if out.Total >= in.Offset && len(out.Pages) < limit {
+				out.Pages = append(out.Pages, pageRef{Slug: m.Slug, Title: m.Title})
+			}
+			out.Total++
 		}
+		out.Truncated = in.Offset+len(out.Pages) < out.Total
 		return nil, out, nil
 	})
 
@@ -375,33 +398,39 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		return nil, historyOut{Revisions: revs}, nil
 	})
 
-	type tagGroup struct {
-		Tag   string    `json:"tag"`
-		Pages []pageRef `json:"pages"`
+	type tagsIn struct {
+		Tag string `json:"tag,omitempty" jsonschema:"list the pages carrying this tag; omit to list every tag with its page count"`
+	}
+	type tagCount struct {
+		Tag   string `json:"tag"`
+		Count int    `json:"count"`
 	}
 	type tagsOut struct {
-		Tags []tagGroup `json:"tags"`
+		Tags  []tagCount `json:"tags"`
+		Pages []pageRef  `json:"pages"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "wiki_tags",
-		Description: "List every tag and the pages that carry it.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, tagsOut, error) {
+		Description: "List every tag with how many pages carry it. Pass tag to get that one tag's pages instead.",
+	}, func(_ context.Context, _ *mcp.CallToolRequest, in tagsIn) (*mcp.CallToolResult, tagsOut, error) {
 		tags, err := st.Tags()
 		if err != nil {
 			return nil, tagsOut{}, err
+		}
+		out := tagsOut{Tags: []tagCount{}, Pages: []pageRef{}}
+		if in.Tag != "" {
+			for _, m := range tags[in.Tag] {
+				out.Pages = append(out.Pages, pageRef{Slug: m.Slug, Title: m.Title})
+			}
+			return nil, out, nil
 		}
 		names := make([]string, 0, len(tags))
 		for name := range tags {
 			names = append(names, name)
 		}
 		sort.Strings(names)
-		out := tagsOut{}
 		for _, name := range names {
-			g := tagGroup{Tag: name}
-			for _, m := range tags[name] {
-				g.Pages = append(g.Pages, pageRef{Slug: m.Slug, Title: m.Title})
-			}
-			out.Tags = append(out.Tags, g)
+			out.Tags = append(out.Tags, tagCount{Tag: name, Count: len(tags[name])})
 		}
 		return nil, out, nil
 	})
