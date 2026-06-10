@@ -202,16 +202,42 @@ func (r *linkResolver) resolve(target string) string {
 	return ""
 }
 
-// LinkChecker returns a predicate reporting whether a wikilink target is fine,
-// using the same tolerant resolution as the link graph: a target is fine if it
-// resolves to a page, or is a benign asset, same-page anchor, or external URL.
-// Lint uses it so its warnings agree with what wiki_health reports as broken.
-func (s *Store) LinkChecker() (func(string) bool, error) {
+// resolver returns the link resolver for the current page set, cached by
+// Signature: building it walks every meta, which is too slow to repeat per
+// lint, write, or not-found lookup on a large wiki.
+func (s *Store) resolver() (*linkResolver, error) {
+	sig, err := s.Signature()
+	if err != nil {
+		return nil, err
+	}
+	s.resolvMu.Lock()
+	if sig == s.resolvSig && s.resolv != nil {
+		r := s.resolv
+		s.resolvMu.Unlock()
+		return r, nil
+	}
+	s.resolvMu.Unlock()
+
 	metas, err := s.List()
 	if err != nil {
 		return nil, err
 	}
 	r := newLinkResolver(metas)
+	s.resolvMu.Lock()
+	s.resolvSig, s.resolv = sig, r
+	s.resolvMu.Unlock()
+	return r, nil
+}
+
+// LinkChecker returns a predicate reporting whether a wikilink target is fine,
+// using the same tolerant resolution as the link graph: a target is fine if it
+// resolves to a page, or is a benign asset, same-page anchor, or external URL.
+// Lint uses it so its warnings agree with what wiki_health reports as broken.
+func (s *Store) LinkChecker() (func(string) bool, error) {
+	r, err := s.resolver()
+	if err != nil {
+		return nil, err
+	}
 	return func(target string) bool {
 		if resolveTarget(r, target) != "" {
 			return true
@@ -368,11 +394,11 @@ func shorterSlug(a, b string) bool {
 // ResolveLink maps a wikilink target (which may carry a |alias or #anchor) to a
 // known page slug, false when it resolves to no page.
 func (s *Store) ResolveLink(target string) (string, bool) {
-	metas, _, _, err := s.graphData()
+	r, err := s.resolver()
 	if err != nil {
 		return "", false
 	}
-	canon := resolveTarget(newLinkResolver(metas), target)
+	canon := resolveTarget(r, target)
 	return canon, canon != ""
 }
 

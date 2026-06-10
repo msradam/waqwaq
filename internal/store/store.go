@@ -5,6 +5,7 @@
 package store
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/gob"
@@ -76,6 +77,15 @@ type Store struct {
 	assetMu  sync.Mutex // guards the asset-by-basename index below
 	assetSig string
 	assetMap map[string]string
+
+	attrMu     sync.Mutex // guards the page-attribution cache below
+	attrSig    string
+	attrBySlug map[string]Attribution
+	attrMisses map[string]*Attribution // per-slug fallback results, nil = no history
+
+	resolvMu  sync.Mutex // guards the link-resolver cache below
+	resolvSig string
+	resolv    *linkResolver
 }
 
 type PageMeta struct {
@@ -803,36 +813,131 @@ type Attribution struct {
 
 var approverRe = regexp.MustCompile(`approved by (\S+)`)
 
+// attrWindow is how many recent commits the batch attribution pass scans. A
+// page last touched before that falls back to a one-off per-slug lookup.
+const attrWindow = 5000
+
 // LastTouched returns the author, the approver (parsed from the commit message),
 // and time of the last commit to change a page; false when there is no history.
+// Attributions come from one batched git log pass cached by Signature, so a page
+// view does not fork a git subprocess.
 func (s *Store) LastTouched(slug string) (*Attribution, bool) {
 	if !s.git {
 		return nil, false
 	}
-	p, err := s.pathFor(slug)
+	canon, err := cleanSlug(slug)
 	if err != nil {
 		return nil, false
 	}
-	rel, err := filepath.Rel(s.gitRoot, p)
+	sig, err := s.Signature()
 	if err != nil {
 		return nil, false
+	}
+	s.attrMu.Lock()
+	if sig != s.attrSig {
+		s.attrBySlug = s.batchAttributions()
+		s.attrMisses = make(map[string]*Attribution)
+		s.attrSig = sig
+	}
+	if a, ok := s.attrBySlug[canon]; ok {
+		s.attrMu.Unlock()
+		return &a, true
+	}
+	if a, ok := s.attrMisses[canon]; ok {
+		s.attrMu.Unlock()
+		return a, a != nil
+	}
+	s.attrMu.Unlock()
+
+	a := s.lastTouchedUncached(canon) // older than the batch window, or never committed
+	s.attrMu.Lock()
+	if sig == s.attrSig {
+		s.attrMisses[canon] = a
+	}
+	s.attrMu.Unlock()
+	return a, a != nil
+}
+
+// batchAttributions reads the newest commit touching each page from one
+// streaming git log over the last attrWindow commits.
+func (s *Store) batchAttributions() map[string]Attribution {
+	pagesRel := filepath.ToSlash(s.relPages())
+	cmd := exec.Command("git", "-c", "core.quotePath=false", "log", "-n", fmt.Sprint(attrWindow),
+		"--name-status", "--format=%x01%an%x1f%aI%x1f%s")
+	cmd.Dir = s.gitRoot
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return map[string]Attribution{}
+	}
+	if err := cmd.Start(); err != nil {
+		return map[string]Attribution{}
+	}
+	defer func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}()
+	out := make(map[string]Attribution)
+	sc := bufio.NewScanner(stdout)
+	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	var cur Attribution
+	for sc.Scan() {
+		line := sc.Text()
+		if len(line) > 0 && line[0] == '\x01' {
+			parts := strings.SplitN(line[1:], "\x1f", 3)
+			cur = Attribution{Author: parts[0]}
+			if len(parts) > 1 {
+				cur.When, _ = time.Parse(time.RFC3339, parts[1])
+			}
+			if len(parts) > 2 {
+				if m := approverRe.FindStringSubmatch(parts[2]); m != nil {
+					cur.Approver = m[1]
+				}
+			}
+			continue
+		}
+		if line == "" {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) < 2 {
+			continue
+		}
+		slug, ok := slugForGitPath(fields[len(fields)-1], pagesRel)
+		if !ok {
+			continue
+		}
+		if _, seen := out[slug]; !seen { // newest first: first occurrence wins
+			out[slug] = cur
+		}
+	}
+	return out
+}
+
+func (s *Store) lastTouchedUncached(slug string) *Attribution {
+	p, err := s.pathFor(slug)
+	if err != nil {
+		return nil
+	}
+	rel, err := filepath.Rel(s.gitRoot, p)
+	if err != nil {
+		return nil
 	}
 	cmd := exec.Command("git", "log", "-1", "--format=%an%x1f%aI%x1f%s", "--", rel)
 	cmd.Dir = s.gitRoot
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, false
+		return nil
 	}
 	parts := strings.SplitN(strings.TrimSpace(string(out)), "\x1f", 3)
 	if len(parts) < 3 {
-		return nil, false
+		return nil
 	}
 	when, _ := time.Parse(time.RFC3339, parts[1])
 	a := &Attribution{Author: parts[0], When: when}
 	if m := approverRe.FindStringSubmatch(parts[2]); m != nil {
 		a.Approver = m[1]
 	}
-	return a, true
+	return a
 }
 
 // SplitFrontmatter separates a leading frontmatter block from the markdown body.

@@ -13,7 +13,7 @@ func TestBuildNavTreeAndActivePath(t *testing.T) {
 		{Slug: "services/auth/tokens", Title: "Tokens"},
 		{Slug: "services/db", Title: "Database"},
 	}
-	nav := buildNav(metas, "services/auth/overview", "")
+	nav := renderNav(buildNav(metas, ""), "services/auth/overview", false)
 
 	services := find(nav, "services")
 	if services == nil {

@@ -234,6 +234,14 @@ func buildWiki(dir, base string, readOnly, forceReview bool, tokensPath string, 
 		return nil, cleanup, config.Config{}, nil, err
 	}
 	go st.Warm()
+	// Re-stat the tree in the background so the adaptive signature memo is
+	// always fresh and no request pays the walk inline (~300ms at 100k pages).
+	go func() {
+		for {
+			time.Sleep(2 * time.Second)
+			_, _ = st.Signature()
+		}
+	}()
 	tp := tokensPath
 	if tp == "" {
 		tp = filepath.Join(st.Root(), ".waqwaq", "tokens.json")

@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -98,6 +99,11 @@ type Server struct {
 	base      string    // URL base path: "" single-wiki, "/w/<name>" in farm mode
 	wikis     []WikiRef // all wikis, for the farm switcher (empty when single)
 	secret    []byte    // per-run secret for signing session cookies
+
+	navMu    sync.Mutex // guards the cached undecorated sidebar tree below
+	navSig   string
+	navNodes []*navNode
+	navTotal int
 }
 
 // WikiRef identifies a wiki for the farm switcher.
@@ -410,12 +416,8 @@ type chrome struct {
 }
 
 func (s *Server) chrome(r *http.Request, active, query string) chrome {
-	pages, _ := s.store.List()
 	pending, _ := s.queue.PendingCount()
-	nav := buildNav(pages, active, s.base)
-	if len(pages) > navInlineLimit {
-		nav = trimNav(nav)
-	}
+	nav := s.nav(active)
 	return chrome{
 		Nav: nav, Pending: pending, Query: query, Active: active,
 		ReadOnly: s.readOnly, CanEdit: !s.readOnly && s.role(r) >= RoleEditor,
@@ -448,26 +450,63 @@ const navInlineLimit = 1000
 // rest into a "+N more" hint, so a flat folder of 100k pages stays navigable.
 const navPerLevel = 150
 
-// trimNav prunes a fully built nav tree for a large wiki: folders off the active
-// path become lazy (children dropped, loaded on demand), folders on it recurse,
-// and surplus leaves at each level collapse into a More count.
-func trimNav(nodes []*navNode) []*navNode {
+// navTree returns the undecorated sidebar tree, cached by corpus signature so
+// a page view copies only the nodes it renders instead of rebuilding all N.
+func (s *Server) navTree() ([]*navNode, int) {
+	sig, err := s.store.Signature()
+	if err != nil {
+		return nil, 0
+	}
+	s.navMu.Lock()
+	if sig == s.navSig && s.navNodes != nil {
+		nodes, total := s.navNodes, s.navTotal
+		s.navMu.Unlock()
+		return nodes, total
+	}
+	s.navMu.Unlock()
+
+	metas, err := s.store.List()
+	if err != nil {
+		return nil, 0
+	}
+	nodes := buildNav(metas, s.base)
+	s.navMu.Lock()
+	s.navSig, s.navNodes, s.navTotal = sig, nodes, len(metas)
+	s.navMu.Unlock()
+	return nodes, len(metas)
+}
+
+// nav decorates the cached tree for one request. Small wikis render whole;
+// large ones render the active spine, folders off it become lazy (children
+// loaded on expand), and surplus entries per level collapse into a More count.
+func (s *Server) nav(active string) []*navNode {
+	nodes, total := s.navTree()
+	return renderNav(nodes, active, total > navInlineLimit)
+}
+
+// renderNav copies the rendered subset of the shared tree, setting the
+// per-request Active/Open/Lazy/More fields on the copies. The cached tree is
+// shared across requests and never mutated.
+func renderNav(nodes []*navNode, active string, trim bool) []*navNode {
 	out := make([]*navNode, 0, len(nodes))
 	shown, more := 0, 0
 	for _, n := range nodes {
-		if !n.Open && !n.Active && shown >= navPerLevel {
+		c := *n
+		c.Active = c.Slug != "" && c.Slug == active
+		c.Open = active == c.Path || strings.HasPrefix(active, c.Path+"/")
+		if trim && !c.Open && !c.Active && shown >= navPerLevel {
 			more++
 			continue
 		}
 		if len(n.Children) > 0 {
-			if n.Open {
-				n.Children = trimNav(n.Children)
+			if !trim || c.Open {
+				c.Children = renderNav(n.Children, active, trim)
 			} else {
-				n.Lazy = true
-				n.Children = nil
+				c.Lazy = true
+				c.Children = nil
 			}
 		}
-		out = append(out, n)
+		out = append(out, &c)
 		shown++
 	}
 	if more > 0 {
@@ -490,7 +529,10 @@ func findNav(nodes []*navNode, path string) *navNode {
 	return nil
 }
 
-func buildNav(metas []store.PageMeta, active, base string) []*navNode {
+// buildNav builds the undecorated sidebar tree. Per-request state (Active,
+// Open, Lazy, More) is set by renderNav on copies, so one built tree serves
+// every request until the corpus changes.
+func buildNav(metas []store.PageMeta, base string) []*navNode {
 	root := &navNode{}
 	byPath := make(map[string]*navNode, len(metas)) // O(1) child lookup; a linear scan is O(n^2) on a flat wiki
 	for _, m := range metas {
@@ -516,16 +558,7 @@ func buildNav(metas []store.PageMeta, active, base string) []*navNode {
 			cur = child
 		}
 	}
-	markNav(root.Children, active)
 	return root.Children
-}
-
-func markNav(nodes []*navNode, active string) {
-	for _, n := range nodes {
-		n.Active = n.Slug != "" && n.Slug == active
-		n.Open = active == n.Path || strings.HasPrefix(active, n.Path+"/")
-		markNav(n.Children, active)
-	}
 }
 
 // handleDelete removes a page. Like editing, an operator with edit rights
@@ -792,13 +825,13 @@ func (s *Server) handleNav(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing path", http.StatusBadRequest)
 		return
 	}
-	pages, _ := s.store.List()
-	node := findNav(buildNav(pages, r.URL.Query().Get("active"), s.base), path)
+	nodes, _ := s.navTree()
+	node := findNav(nodes, path)
 	if node == nil {
 		return
 	}
 	var buf bytes.Buffer
-	if err := s.tmpl.ExecuteTemplate(&buf, "navtree", trimNav(node.Children)); err != nil {
+	if err := s.tmpl.ExecuteTemplate(&buf, "navtree", renderNav(node.Children, r.URL.Query().Get("active"), true)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
