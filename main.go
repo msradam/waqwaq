@@ -257,7 +257,7 @@ func buildWiki(dir, base string, readOnly, forceReview bool, tokensPath string, 
 		go idx.Warm()
 	}
 	queueAll := forceReview || cfg.Review
-	mcpSrv := mcpserver.New(st, q, reg, mcpserver.Options{ReadOnly: readOnly, ForceReview: queueAll, Rules: cfg.Lint, Search: searcher})
+	mcpSrv := mcpserver.New(st, q, reg, mcpserver.Options{ReadOnly: readOnly, ForceReview: queueAll, Rules: cfg.Lint, Search: searcher, Title: cfg.Title})
 	users := make([]server.WebUser, 0, len(cfg.Web.Users))
 	for _, u := range cfg.Web.Users {
 		users = append(users, server.WebUser{Name: u.Name, Hash: u.Password, Role: u.Role})
@@ -494,7 +494,7 @@ func cmdMCP(args []string) {
 		go idx.Warm()
 	}
 	srv := mcpserver.New(st, q, reg, mcpserver.Options{
-		ReadOnly: *readOnly, ForceReview: *forceReview || cfg.Review, Rules: cfg.Lint, Search: searcher,
+		ReadOnly: *readOnly, ForceReview: *forceReview || cfg.Review, Rules: cfg.Lint, Search: searcher, Title: cfg.Title,
 	})
 	if err := mcpserver.ServeStdio(context.Background(), srv); err != nil && !errors.Is(err, io.EOF) {
 		log.Fatalf("mcp: %v", err)

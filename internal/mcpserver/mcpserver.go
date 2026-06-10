@@ -22,8 +22,9 @@ import (
 	"github.com/msradam/waqwaq/internal/version"
 )
 
-const baseInstructions = `This is a Waqwaq wiki: git-backed markdown pages that humans browse and agents maintain.
+const defaultInstructionsPreamble = "This is a git-backed markdown wiki: pages that humans browse and agents maintain."
 
+const baseInstructionsSuffix = `
 Read with wiki_list (page through large wikis with prefix and offset), wiki_read, wiki_search, and wiki_graph (the page link graph).
 wiki_tags lists every tag with a count; pass a tag to get its pages.
 Navigate by relationship: wiki_hubs lists the most-connected pages to read first, wiki_neighbors pulls a page's linked neighbourhood in one call, wiki_path returns the chain connecting two pages, and wiki_backlinks lists what links to a page.
@@ -33,11 +34,15 @@ Create or replace pages with wiki_write. Each page needs YAML frontmatter with a
 wiki_lint dry-runs the checks. A missing title blocks a write; unresolved wikilinks are warnings.
 Depending on your access, a write either commits straight to git or is queued as a proposal for a human to approve. Check the status field returned by wiki_write, and list the queue with wiki_list_proposals.`
 
+// baseInstructions kept for compatibility with tests that reference it directly.
+const baseInstructions = defaultInstructionsPreamble + baseInstructionsSuffix
+
 type Options struct {
 	ReadOnly    bool
 	ForceReview bool
 	Rules       lint.Rules
 	Search      search.Searcher
+	Title       string // display name used in serverInfo and instructions preamble
 }
 
 type noArgs struct{}
@@ -64,13 +69,18 @@ func ServeStdio(ctx context.Context, srv *mcp.Server) error {
 }
 
 func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mcp.Server {
-	instructions := baseInstructions
+	title := opts.Title
+	if title == "" {
+		title = "wiki"
+	}
+	preamble := "This is " + title + ": git-backed markdown pages that humans browse and agents maintain."
+	instructions := preamble + baseInstructionsSuffix
 	if schema := st.Instructions(); schema != "" {
 		instructions += "\n\n--- wiki schema (CLAUDE.md) ---\n\n" + schema
 	}
 
 	s := mcp.NewServer(
-		&mcp.Implementation{Name: "waqwaq", Title: "Waqwaq wiki", Version: version.Version},
+		&mcp.Implementation{Name: title, Title: title, Version: version.Version},
 		&mcp.ServerOptions{Instructions: instructions},
 	)
 
