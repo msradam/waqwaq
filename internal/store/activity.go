@@ -244,13 +244,14 @@ func (s *Store) History(slug string) ([]Revision, error) {
 }
 
 // Tags maps every tag to the pages that carry it in their frontmatter, cached
-// by Signature so the per-page frontmatter reads happen once per change.
+// by Signature and fed from the shared pageInfos cache so only changed pages
+// are re-read.
 func (s *Store) Tags() (map[string][]PageMeta, error) {
 	metas, err := s.List()
 	if err != nil {
 		return nil, err
 	}
-	sig, err := s.Signature()
+	sig, stats, err := s.signatureStats()
 	if err != nil {
 		return nil, err
 	}
@@ -262,13 +263,14 @@ func (s *Store) Tags() (map[string][]PageMeta, error) {
 	}
 	s.tagsMu.Unlock()
 
+	infos := s.pageInfos(stats)
 	tags := map[string][]PageMeta{}
 	for _, m := range metas {
-		page, err := s.Read(m.Slug)
-		if err != nil {
+		pi := infos[m.Slug]
+		if pi == nil {
 			continue
 		}
-		for _, t := range FrontmatterTags(page.Frontmatter) {
+		for _, t := range pi.Tags {
 			tags[t] = append(tags[t], m)
 		}
 	}

@@ -1,7 +1,6 @@
 package store
 
 import (
-	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -30,8 +29,10 @@ type Health struct {
 
 // graphData builds the link graph (pages, resolved [[wikilink]] edges, broken
 // links to missing pages), cached by signature so it recomputes only on change.
+// The per-page link extraction comes from the shared pageInfos cache, so a
+// rebuild re-reads only the pages that changed.
 func (s *Store) graphData() ([]PageMeta, []GraphEdge, []BrokenLink, error) {
-	sig, err := s.Signature()
+	sig, stats, err := s.signatureStats()
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -44,39 +45,13 @@ func (s *Store) graphData() ([]PageMeta, []GraphEdge, []BrokenLink, error) {
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	fps, err := s.Fingerprints()
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	// Re-read only the pages whose fingerprint changed; reuse the cached link
-	// extraction for the rest. Resolution below always runs against the current
-	// page set, so adds and deletes stay correct without re-reading everything.
-	if s.graphParse == nil {
-		s.graphParse = make(map[string]*parsedPage, len(fps))
-	}
-	for slug, fp := range fps {
-		if p, ok := s.graphParse[slug]; ok && p.fp == fp {
-			continue
-		}
-		page, err := s.Read(slug)
-		if err != nil {
-			delete(s.graphParse, slug)
-			continue
-		}
-		body := stripCode(page.Body)
-		s.graphParse[slug] = &parsedPage{fp: fp, wiki: wikiLinks(body), md: markdownLinkTargets(body)}
-	}
-	for slug := range s.graphParse {
-		if _, ok := fps[slug]; !ok {
-			delete(s.graphParse, slug)
-		}
-	}
+	infos := s.pageInfos(stats)
 
 	resolver := newLinkResolver(metas)
 	var edges []GraphEdge
 	var broken []BrokenLink
 	for _, m := range metas {
-		pp := s.graphParse[m.Slug]
+		pp := infos[m.Slug]
 		if pp == nil {
 			continue
 		}
@@ -87,14 +62,14 @@ func (s *Store) graphData() ([]PageMeta, []GraphEdge, []BrokenLink, error) {
 				edges = append(edges, GraphEdge{From: m.Slug, To: canon})
 			}
 		}
-		for _, lk := range pp.wiki {
-			if lk.embed {
+		for _, lk := range pp.Wiki {
+			if lk.Embed {
 				continue // image/note transclusions are content, not page edges
 			}
-			canon := resolveTarget(resolver, lk.target)
+			canon := resolveTarget(resolver, lk.Target)
 			if canon == "" {
 				// Skip same-page anchors ([[#heading]]), assets, and external URLs.
-				if name := brokenName(lk.target); name != "" && !isAssetRef(lk.target) && !strings.Contains(lk.target, "://") {
+				if name := brokenName(lk.Target); name != "" && !isAssetRef(lk.Target) && !strings.Contains(lk.Target, "://") {
 					broken = append(broken, BrokenLink{From: m.Slug, To: name})
 				}
 				continue
@@ -103,20 +78,12 @@ func (s *Store) graphData() ([]PageMeta, []GraphEdge, []BrokenLink, error) {
 		}
 		// Plain markdown links to internal pages also count as edges, but a missing
 		// one is not flagged broken: markdown links to external files are benign.
-		for _, t := range pp.md {
+		for _, t := range pp.Md {
 			addEdge(resolver.resolve(t))
 		}
 	}
 	s.graphSig, s.graphMetas, s.graphEdges, s.graphBroken = sig, metas, edges, broken
 	return metas, edges, broken, nil
-}
-
-// parsedPage is one page's link extraction, cached by fingerprint so an
-// unchanged page is not re-read on a graph rebuild.
-type parsedPage struct {
-	fp   string
-	wiki []wlink
-	md   []string
 }
 
 // Backlinks returns the pages that link to the given slug.
@@ -150,16 +117,25 @@ func (s *Store) Health() (*Health, error) {
 	if err != nil {
 		return nil, err
 	}
+	_, stats, err := s.signatureStats()
+	if err != nil {
+		return nil, err
+	}
 	incoming := make(map[string]bool, len(edges))
 	for _, e := range edges {
 		incoming[e.To] = true
 	}
+	now := time.Now()
 	h := &Health{Broken: broken}
 	for _, m := range metas {
 		if !incoming[m.Slug] && !rootSlugs[m.Slug] {
 			h.Orphans = append(h.Orphans, m)
 		}
-		if d := s.ageDays(m.Slug); d >= staleDays {
+		st, ok := stats[m.Slug]
+		if !ok {
+			continue
+		}
+		if d := int(now.Sub(time.Unix(0, st.MtimeNano)).Hours() / 24); d >= staleDays {
 			h.Stale = append(h.Stale, StalePage{Slug: m.Slug, Title: m.Title, Days: d})
 		}
 	}
@@ -254,9 +230,11 @@ func normalize(s string) string {
 	return strings.ReplaceAll(s, " ", "-")
 }
 
+// wlink is one [[...]] reference; fields are exported so the persisted page
+// cache can gob-encode it.
 type wlink struct {
-	target string
-	embed  bool // preceded by !, an image or note transclusion
+	Target string
+	Embed  bool // preceded by !, an image or note transclusion
 }
 
 // wikiLinks returns the [[...]] references in body, flagging embeds (![[...]]).
@@ -265,8 +243,8 @@ func wikiLinks(body string) []wlink {
 	out := make([]wlink, 0, len(locs))
 	for _, loc := range locs {
 		out = append(out, wlink{
-			target: body[loc[2]:loc[3]],
-			embed:  loc[0] > 0 && body[loc[0]-1] == '!',
+			Target: body[loc[2]:loc[3]],
+			Embed:  loc[0] > 0 && body[loc[0]-1] == '!',
 		})
 	}
 	return out
@@ -646,16 +624,4 @@ func (s *Store) GraphView() (*GraphView, error) {
 		nodes = append(nodes, GraphNode{Slug: m.Slug, Title: title[m.Slug], Degree: len(adj[m.Slug])})
 	}
 	return &GraphView{Nodes: nodes, Edges: edges}, nil
-}
-
-func (s *Store) ageDays(slug string) int {
-	p, err := s.pathFor(slug)
-	if err != nil {
-		return 0
-	}
-	info, err := os.Stat(p)
-	if err != nil {
-		return 0
-	}
-	return int(time.Since(info.ModTime()).Hours() / 24)
 }

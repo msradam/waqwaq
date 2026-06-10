@@ -7,6 +7,7 @@ package store
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/gob"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -40,23 +41,27 @@ type Store struct {
 	git     bool
 	mu      sync.Mutex // serializes writes so concurrent commits cannot race on git
 
-	sigMu  sync.Mutex // memoizes the corpus signature so cache checks need not re-stat the tree
-	sigVal string
-	sigAt  time.Time
+	sigMu    sync.Mutex // memoizes the corpus signature so cache checks need not re-stat the tree
+	sigVal   string
+	sigAt    time.Time
+	sigStats map[string]fileStat // per-page stats from the same walk
+	sigTTL   time.Duration       // adaptive: scales with the measured walk time
 
 	listMu    sync.Mutex // guards the page-list cache below
 	listSig   string
 	listMetas []PageMeta
 
-	titleMu    sync.Mutex // guards the per-page title cache, reused across list rebuilds
-	titleCache map[string]titleEntry
+	infoMu     sync.Mutex // guards the per-page derived cache below
+	infoMap    map[string]*pageInfo
+	infoLoaded bool
+	infoDirty  bool
+	infoSaved  time.Time
 
 	graphMu     sync.Mutex // guards the link-graph cache below
 	graphSig    string
 	graphMetas  []PageMeta
 	graphEdges  []GraphEdge
 	graphBroken []BrokenLink
-	graphParse  map[string]*parsedPage // per-page extracted links, reused across rebuilds when a page's fingerprint is unchanged
 
 	adjMu    sync.Mutex // guards the undirected-adjacency cache below
 	adjSig   string
@@ -237,7 +242,7 @@ func (s *Store) Warm() {
 // List returns every page's slug and title, cached by Signature so the
 // per-page title reads happen once per change rather than on every call.
 func (s *Store) List() ([]PageMeta, error) {
-	sig, err := s.Signature()
+	sig, stats, err := s.signatureStats()
 	if err != nil {
 		return nil, err
 	}
@@ -249,136 +254,92 @@ func (s *Store) List() ([]PageMeta, error) {
 	}
 	s.listMu.Unlock()
 
-	metas, err := s.listUncached()
-	if err != nil {
-		return nil, err
+	infos := s.pageInfos(stats)
+	metas := make([]PageMeta, 0, len(infos))
+	for slug, pi := range infos {
+		metas = append(metas, PageMeta{Slug: slug, Title: pi.Title})
 	}
+	sort.Slice(metas, func(i, j int) bool { return metas[i].Slug < metas[j].Slug })
 	s.listMu.Lock()
 	s.listSig, s.listMetas = sig, metas
 	s.listMu.Unlock()
 	return metas, nil
 }
 
-// titleEntry caches a page's derived title against its content fingerprint, so a
-// list rebuild re-reads only the titles of pages that changed.
-type titleEntry struct {
-	fp    string
-	title string
+// fileStat is a page's cheap content fingerprint, computed from stats alone.
+type fileStat struct {
+	MtimeNano int64
+	Size      int64
 }
 
-func (s *Store) listUncached() ([]PageMeta, error) {
-	s.titleMu.Lock()
-	defer s.titleMu.Unlock()
-	if s.titleCache == nil {
-		s.titleCache = make(map[string]titleEntry)
-	}
-	seen := make(map[string]bool)
-	var metas []PageMeta
-	err := filepath.WalkDir(s.pages, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if path != s.pages && (d.Name() == ".git" || path == s.raw) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(d.Name(), ".md") {
-			return nil
-		}
-		rel, _ := filepath.Rel(s.pages, path)
-		slug := strings.TrimSuffix(filepath.ToSlash(rel), ".md")
-		fp := ""
-		if info, err := d.Info(); err == nil {
-			fp = fmt.Sprintf("%d|%d", info.ModTime().UnixNano(), info.Size())
-		}
-		seen[slug] = true
-		title := ""
-		if te, ok := s.titleCache[slug]; ok && fp != "" && te.fp == fp {
-			title = te.title
-		} else {
-			title = s.titleOf(path, slug)
-			s.titleCache[slug] = titleEntry{fp: fp, title: title}
-		}
-		metas = append(metas, PageMeta{Slug: slug, Title: title})
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	for slug := range s.titleCache {
-		if !seen[slug] {
-			delete(s.titleCache, slug)
-		}
-	}
-	sort.Slice(metas, func(i, j int) bool { return metas[i].Slug < metas[j].Slug })
-	return metas, nil
-}
+func (f fileStat) fp() string { return fmt.Sprintf("%d|%d", f.MtimeNano, f.Size) }
 
-// sigTTL bounds how long a computed Signature is reused before re-stating the
-// tree. Internal writes invalidate it immediately; this only delays noticing
-// edits made by another process, which a read-mostly wiki tolerates.
-const sigTTL = time.Second
+// sigTTLBounds clamp how long a computed Signature is reused before re-stating
+// the tree. The TTL adapts to the measured walk time (50x, so the walk stays
+// ~2% overhead): a small wiki re-checks every second, a 20k-page one every few
+// seconds. Internal writes invalidate it immediately; the TTL only delays
+// noticing edits made by another process, which a read-mostly wiki tolerates.
+const (
+	sigTTLMin = time.Second
+	sigTTLMax = 15 * time.Second
+)
 
 // Signature is a hash of every page's path, mtime, and size, so a cache can
 // detect staleness (including edits by external tools) from stats alone, no
-// file reads. The result is memoized for sigTTL so the many cache checks that
-// call it do not each re-walk a large tree.
+// file reads. The result is memoized so the many cache checks that call it do
+// not each re-walk a large tree.
 func (s *Store) Signature() (string, error) {
-	s.sigMu.Lock()
-	if s.sigVal != "" && time.Since(s.sigAt) < sigTTL {
-		v := s.sigVal
-		s.sigMu.Unlock()
-		return v, nil
-	}
-	s.sigMu.Unlock()
-
-	sig, err := s.computeSignature()
-	if err != nil {
-		return "", err
-	}
-	s.sigMu.Lock()
-	s.sigVal, s.sigAt = sig, time.Now()
-	s.sigMu.Unlock()
-	return sig, nil
+	sig, _, err := s.signatureStats()
+	return sig, err
 }
 
-// Fingerprints maps each page's slug to a cheap content fingerprint (mtime and
-// size) computed from stats alone. Incremental indexers diff it against their
-// last view to re-read only the pages that changed.
+// Fingerprints maps each page's slug to its content fingerprint. Incremental
+// indexers diff it against their last view to re-read only the pages that
+// changed. It shares the memoized walk with Signature.
 func (s *Store) Fingerprints() (map[string]string, error) {
-	fps := make(map[string]string)
-	err := filepath.WalkDir(s.pages, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if path != s.pages && (d.Name() == ".git" || path == s.raw) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(d.Name(), ".md") {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(s.pages, path)
-		slug := strings.TrimSuffix(filepath.ToSlash(rel), ".md")
-		fps[slug] = fmt.Sprintf("%d|%d", info.ModTime().UnixNano(), info.Size())
-		return nil
-	})
+	_, stats, err := s.signatureStats()
 	if err != nil {
 		return nil, err
+	}
+	fps := make(map[string]string, len(stats))
+	for slug, st := range stats {
+		fps[slug] = st.fp()
 	}
 	return fps, nil
 }
 
-func (s *Store) computeSignature() (string, error) {
+// signatureStats returns the corpus signature and every page's stats from a
+// single memoized tree walk.
+func (s *Store) signatureStats() (string, map[string]fileStat, error) {
+	s.sigMu.Lock()
+	if s.sigVal != "" && time.Since(s.sigAt) < s.sigTTL {
+		v, st := s.sigVal, s.sigStats
+		s.sigMu.Unlock()
+		return v, st, nil
+	}
+	s.sigMu.Unlock()
+
+	start := time.Now()
+	sig, stats, err := s.walkStats()
+	if err != nil {
+		return "", nil, err
+	}
+	ttl := time.Since(start) * 50
+	if ttl < sigTTLMin {
+		ttl = sigTTLMin
+	}
+	if ttl > sigTTLMax {
+		ttl = sigTTLMax
+	}
+	s.sigMu.Lock()
+	s.sigVal, s.sigAt, s.sigStats, s.sigTTL = sig, time.Now(), stats, ttl
+	s.sigMu.Unlock()
+	return sig, stats, nil
+}
+
+func (s *Store) walkStats() (string, map[string]fileStat, error) {
 	h := sha256.New()
+	stats := make(map[string]fileStat)
 	err := filepath.WalkDir(s.pages, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -396,13 +357,163 @@ func (s *Store) computeSignature() (string, error) {
 		if err != nil {
 			return err
 		}
+		rel, _ := filepath.Rel(s.pages, path)
+		slug := strings.TrimSuffix(filepath.ToSlash(rel), ".md")
+		stats[slug] = fileStat{MtimeNano: info.ModTime().UnixNano(), Size: info.Size()}
 		fmt.Fprintf(h, "%s|%d|%d\n", path, info.ModTime().UnixNano(), info.Size())
 		return nil
 	})
 	if err != nil {
+		return "", nil, err
+	}
+	return hex.EncodeToString(h.Sum(nil)), stats, nil
+}
+
+// pageInfo is everything derived from one read of a page (title, tags, link
+// extraction), cached against its fingerprint and persisted across processes,
+// so the list, graph, and tag views share a single corpus read instead of
+// each re-reading every page.
+type pageInfo struct {
+	Fp    string
+	Title string
+	Tags  []string
+	Wiki  []wlink
+	Md    []string
+}
+
+func derivePageInfo(raw, slug, fp string) *pageInfo {
+	fm, body := SplitFrontmatter(raw)
+	stripped := stripCode(body)
+	return &pageInfo{
+		Fp:    fp,
+		Title: titleFrom(fm, body, slug),
+		Tags:  FrontmatterTags(fm),
+		Wiki:  wikiLinks(stripped),
+		Md:    markdownLinkTargets(stripped),
+	}
+}
+
+// pageInfos returns the derived info for every page in stats, re-reading only
+// pages whose fingerprint changed. The cache is loaded from and saved to the
+// wiki's cache directory, so a fresh process reuses what a previous one derived
+// instead of re-reading the corpus.
+func (s *Store) pageInfos(stats map[string]fileStat) map[string]*pageInfo {
+	s.infoMu.Lock()
+	if !s.infoLoaded {
+		s.infoLoaded = true
+		s.loadInfoCache()
+	}
+	if s.infoMap == nil {
+		s.infoMap = make(map[string]*pageInfo, len(stats))
+	}
+	changed := false
+	for slug, st := range stats {
+		fp := st.fp()
+		if pi, ok := s.infoMap[slug]; ok && pi.Fp == fp {
+			continue
+		}
+		path := filepath.Join(s.pages, filepath.FromSlash(slug)+".md")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			delete(s.infoMap, slug)
+			changed = true
+			continue
+		}
+		s.infoMap[slug] = derivePageInfo(string(data), slug, fp)
+		changed = true
+	}
+	for slug := range s.infoMap {
+		if _, ok := stats[slug]; !ok {
+			delete(s.infoMap, slug)
+			changed = true
+		}
+	}
+	snapshot := make(map[string]*pageInfo, len(s.infoMap))
+	for k, v := range s.infoMap {
+		snapshot[k] = v
+	}
+	var toSave map[string]*pageInfo
+	if changed || s.infoDirty {
+		// Rate-limit saves so a burst of writes does not re-serialize the cache
+		// on every page; a dirty cache is retried on the next rebuild.
+		if time.Since(s.infoSaved) > 5*time.Second {
+			toSave, s.infoDirty, s.infoSaved = snapshot, false, time.Now()
+		} else {
+			s.infoDirty = true
+		}
+	}
+	s.infoMu.Unlock()
+	if toSave != nil {
+		s.saveInfoCache(toSave)
+	}
+	return snapshot
+}
+
+// CacheDir returns this wiki's directory under the OS cache directory, keyed by
+// the resolved root path so every name for the same physical wiki (notably /tmp
+// vs /private/tmp on macOS) shares one cache.
+func (s *Store) CacheDir() (string, error) {
+	cache, err := os.UserCacheDir()
+	if err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	root := s.gitRoot
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	key := sha256.Sum256([]byte(root))
+	dir := filepath.Join(cache, "waqwaq", hex.EncodeToString(key[:8]))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+// pages-v1 in the name lets a future cache layout change use a fresh file.
+const infoCacheName = "pages-v1.gob"
+
+type infoCacheData struct {
+	Pages map[string]*pageInfo
+}
+
+func (s *Store) loadInfoCache() {
+	dir, err := s.CacheDir()
+	if err != nil {
+		return
+	}
+	f, err := os.Open(filepath.Join(dir, infoCacheName))
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	var data infoCacheData
+	if gob.NewDecoder(f).Decode(&data) != nil {
+		return
+	}
+	s.infoMap = data.Pages
+}
+
+func (s *Store) saveInfoCache(pages map[string]*pageInfo) {
+	dir, err := s.CacheDir()
+	if err != nil {
+		return
+	}
+	tmp, err := os.CreateTemp(dir, "pages-*.tmp")
+	if err != nil {
+		return
+	}
+	if gob.NewEncoder(tmp).Encode(infoCacheData{Pages: pages}) != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmp.Name())
+		return
+	}
+	if os.Rename(tmp.Name(), filepath.Join(dir, infoCacheName)) != nil {
+		_ = os.Remove(tmp.Name())
+	}
 }
 
 func (s *Store) KnownSlugs() (map[string]bool, error) {
@@ -432,7 +543,7 @@ func (s *Store) Read(slug string) (*Page, error) {
 	raw := string(data)
 	fm, body := SplitFrontmatter(raw)
 	canon, _ := cleanSlug(slug) // pathFor already validated it
-	return &Page{Slug: canon, Title: s.titleOf(p, canon), Frontmatter: fm, Body: body, Raw: raw}, nil
+	return &Page{Slug: canon, Title: titleFrom(fm, body, canon), Frontmatter: fm, Body: body, Raw: raw}, nil
 }
 
 func (s *Store) Write(slug, content, author, message string) error {
@@ -470,7 +581,7 @@ func (s *Store) Write(slug, content, author, message string) error {
 // just-written page is reflected without waiting for the memo to expire.
 func (s *Store) invalidateSignature() {
 	s.sigMu.Lock()
-	s.sigVal, s.sigAt = "", time.Time{}
+	s.sigVal, s.sigAt, s.sigStats = "", time.Time{}, nil
 	s.sigMu.Unlock()
 }
 
@@ -643,12 +754,7 @@ func safeRawName(name string) error {
 	return nil
 }
 
-func (s *Store) titleOf(path, slug string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return filepath.Base(slug)
-	}
-	fm, body := SplitFrontmatter(string(data))
+func titleFrom(fm map[string]any, body, slug string) string {
 	if t, ok := fm["title"].(string); ok && strings.TrimSpace(t) != "" {
 		return t
 	}
