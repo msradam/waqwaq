@@ -32,15 +32,21 @@
   var svg = document.getElementById('oracle-svg');
   var status = document.getElementById('oracle-status');
   var NS = 'http://www.w3.org/2000/svg';
+  var TYPE_PALETTE = ['#E07B54','#5B8DB8','#7AAE7B','#9B6BA8','#C9A227','#5BA8A0','#D45F78','#7B8C9E','#B07D4E','#4E7BAA'];
   fetch(base + '/graph.json').then(function(r){ return r.json(); }).then(function(data){
     var raw = data.nodes || [];
     if (!raw.length){ status.textContent = 'No pages yet.'; return; }
     var rect = svg.getBoundingClientRect();
     var W = rect.width || 800, H = rect.height || 500;
     svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+
+    // Build type → color map from unique non-empty types.
+    var typesSeen = [], typeColor = {};
+    raw.forEach(function(d){ if (d.type && !typeColor[d.type]){ typeColor[d.type] = TYPE_PALETTE[typesSeen.length % TYPE_PALETTE.length]; typesSeen.push(d.type); } });
+
     var idx = new Map();
     var nodes = raw.map(function(d, i){ idx.set(d.slug, i);
-      return { slug: d.slug, title: d.title || d.slug, deg: d.degree || 0,
+      return { slug: d.slug, title: d.title || d.slug, type: d.type || '', deg: d.degree || 0,
         x: Math.random()*W, y: Math.random()*H, dx: 0, dy: 0 }; });
     var edges = (data.edges || []).filter(function(e){ return idx.has(e.from) && idx.has(e.to); })
       .map(function(e){ return { s: idx.get(e.from), t: idx.get(e.to) }; });
@@ -54,7 +60,11 @@
     var circleEls = nodes.map(function(nd, i){
       var c = document.createElementNS(NS,'circle'); c.setAttribute('class','node');
       c.setAttribute('r', 4 + Math.sqrt(nd.deg)*2);
-      var tt = document.createElementNS(NS,'title'); tt.textContent = nd.title + (nd.deg ? ' · ' + nd.deg + ' links' : ''); c.appendChild(tt);
+      if (nd.type && typeColor[nd.type]) { c.style.fill = typeColor[nd.type]; }
+      var tipParts = [nd.title];
+      if (nd.type) { tipParts.push(nd.type); }
+      if (nd.deg) { tipParts.push(nd.deg + ' links'); }
+      var tt = document.createElementNS(NS,'title'); tt.textContent = tipParts.join(' · '); c.appendChild(tt);
       c.addEventListener('click', function(){ location.href = base + '/wiki/' + nd.slug.split('/').map(encodeURIComponent).join('/'); });
       c.addEventListener('mouseenter', function(){ hot(i); });
       c.addEventListener('mouseleave', cool);
@@ -88,7 +98,24 @@
     var iter = 0, maxIter = n > 400 ? 160 : 400;
     function loop(){ for (var s = 0; s < 4; s++){ step(); iter++; } draw();
       if (iter < maxIter && temp > 1.2){ requestAnimationFrame(loop); }
-      else { status.textContent = (data.truncated ? 'the ' + n + ' most-connected of ' + data.total + ' pages' : n + ' pages') + ' · ' + edges.length + ' links'; } }
+      else {
+        status.textContent = (data.truncated ? 'the ' + n + ' most-connected of ' + data.total + ' pages' : n + ' pages') + ' · ' + edges.length + ' links';
+        if (typesSeen.length > 1) {
+          var legend = document.createElement('div');
+          legend.style.cssText = 'display:flex;flex-wrap:wrap;gap:10px 16px;margin-top:10px;font-size:12px;color:var(--muted,#888)';
+          typesSeen.forEach(function(t){
+            var item = document.createElement('span');
+            item.style.cssText = 'display:flex;align-items:center;gap:5px';
+            var dot = document.createElement('span');
+            dot.style.cssText = 'display:inline-block;width:10px;height:10px;border-radius:50%;background:' + typeColor[t];
+            item.appendChild(dot);
+            item.appendChild(document.createTextNode(t));
+            legend.appendChild(item);
+          });
+          wrap.appendChild(legend);
+        }
+      }
+    }
     requestAnimationFrame(loop);
   }).catch(function(){ status.textContent = 'Could not load the graph.'; });
 })();

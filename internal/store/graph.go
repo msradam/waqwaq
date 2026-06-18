@@ -418,6 +418,7 @@ type GraphNode struct {
 	Slug   string `json:"slug"`
 	Title  string `json:"title"`
 	Degree int    `json:"degree"`
+	Type   string `json:"type,omitempty"` // OKF type frontmatter field, when set
 }
 
 type GraphView struct {
@@ -634,20 +635,29 @@ func (s *Store) Hubs(n int) ([]Hub, error) {
 	return hubs, nil
 }
 
-// GraphView returns the whole link graph as nodes (with degree) and edges, for
-// rendering the visual map.
+// GraphView returns the whole link graph as nodes (with degree and OKF type)
+// and edges, for rendering the visual map.
 func (s *Store) GraphView() (*GraphView, error) {
 	metas, edges, _, err := s.graphData()
 	if err != nil {
 		return nil, err
 	}
+	_, stats, err := s.signatureStats()
+	if err != nil {
+		return nil, err
+	}
+	infos := s.pageInfos(stats)
 	_, title, adj, err := s.adjacency()
 	if err != nil {
 		return nil, err
 	}
 	nodes := make([]GraphNode, 0, len(metas))
 	for _, m := range metas {
-		nodes = append(nodes, GraphNode{Slug: m.Slug, Title: title[m.Slug], Degree: len(adj[m.Slug])})
+		t := ""
+		if pi, ok := infos[m.Slug]; ok {
+			t = pi.OKFType
+		}
+		nodes = append(nodes, GraphNode{Slug: m.Slug, Title: title[m.Slug], Degree: len(adj[m.Slug]), Type: t})
 	}
 	return &GraphView{Nodes: nodes, Edges: edges}, nil
 }

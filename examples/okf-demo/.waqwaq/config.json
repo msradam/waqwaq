@@ -1,0 +1,5 @@
+{
+  "title": "Acme Data Catalog",
+  "okf": true,
+  "mcp_description": "a structured data catalog with typed knowledge about datasets, tables, and metrics"
+}

@@ -189,3 +189,107 @@ func TestEmptyResultsSerializeAsArrays(t *testing.T) {
 		}
 	}
 }
+
+func okfPage(title, okfType, description, resource string) string {
+	return fmt.Sprintf("---\ntitle: %s\ntype: %s\ndescription: %s\nresource: %s\ntags: [data]\ntimestamp: 2026-06-01T00:00:00Z\n---\n\n# %s\n", title, okfType, description, resource, title)
+}
+
+func TestOKFListAndTypeFilter(t *testing.T) {
+	cs := testSession(t, map[string]string{
+		"datasets/sales":   okfPage("Sales Dataset", "Dataset", "Order data", "https://example.com/sales"),
+		"tables/orders":    okfPage("Orders", "BigQuery Table", "One row per order", "https://example.com/orders"),
+		"tables/customers": okfPage("Customers", "BigQuery Table", "Customer master", "https://example.com/customers"),
+		"metrics/wau":      okfPage("Weekly Active Users", "Metric", "WAU definition", "https://example.com/wau"),
+	})
+
+	type okfEntry struct {
+		Slug        string   `json:"slug"`
+		Title       string   `json:"title"`
+		Type        string   `json:"type"`
+		Description string   `json:"description"`
+		Resource    string   `json:"resource"`
+		Tags        []string `json:"tags"`
+		Timestamp   string   `json:"timestamp"`
+	}
+	type listResult struct {
+		Pages     []okfEntry `json:"pages"`
+		Total     int        `json:"total"`
+		Truncated bool       `json:"truncated"`
+	}
+
+	// All pages include OKF fields.
+	var all listResult
+	callJSON(t, cs, "wiki_list", nil, &all)
+	if all.Total != 4 {
+		t.Fatalf("total = %d, want 4", all.Total)
+	}
+	for _, p := range all.Pages {
+		if p.Type == "" {
+			t.Errorf("page %q missing type", p.Slug)
+		}
+		if p.Resource == "" {
+			t.Errorf("page %q missing resource", p.Slug)
+		}
+		if p.Timestamp == "" {
+			t.Errorf("page %q missing timestamp", p.Slug)
+		}
+	}
+
+	// Type filter: only BigQuery Table pages.
+	var tables listResult
+	callJSON(t, cs, "wiki_list", map[string]any{"type": "BigQuery Table"}, &tables)
+	if tables.Total != 2 {
+		t.Fatalf("type filter total = %d, want 2", tables.Total)
+	}
+	for _, p := range tables.Pages {
+		if p.Type != "BigQuery Table" {
+			t.Errorf("type filter returned %q with type %q", p.Slug, p.Type)
+		}
+	}
+
+	// Type filter is case-insensitive.
+	var lower listResult
+	callJSON(t, cs, "wiki_list", map[string]any{"type": "bigquery table"}, &lower)
+	if lower.Total != 2 {
+		t.Fatalf("case-insensitive type filter total = %d, want 2", lower.Total)
+	}
+
+	// Type filter + prefix together.
+	var narrow listResult
+	callJSON(t, cs, "wiki_list", map[string]any{"type": "Dataset", "prefix": "datasets/"}, &narrow)
+	if narrow.Total != 1 || narrow.Pages[0].Slug != "datasets/sales" {
+		t.Fatalf("type+prefix filter: %+v", narrow)
+	}
+}
+
+func TestOKFGraphNodesIncludeType(t *testing.T) {
+	cs := testSession(t, map[string]string{
+		"tables/orders": okfPage("Orders", "BigQuery Table", "One row per order", "https://example.com/orders"),
+		"metrics/wau":   okfPage("WAU", "Metric", "Weekly active users", "https://example.com/wau"),
+		"plain":         "---\ntitle: Plain\n---\n\nNo OKF type.\n",
+	})
+
+	type node struct {
+		Slug   string `json:"slug"`
+		Type   string `json:"type"`
+		Degree int    `json:"degree"`
+	}
+	var result struct {
+		Pages []node `json:"pages"`
+	}
+	callJSON(t, cs, "wiki_graph", nil, &result)
+
+	typeBySlug := make(map[string]string, len(result.Pages))
+	for _, p := range result.Pages {
+		typeBySlug[p.Slug] = p.Type
+	}
+	if typeBySlug["tables/orders"] != "BigQuery Table" {
+		t.Errorf("orders type = %q, want BigQuery Table", typeBySlug["tables/orders"])
+	}
+	if typeBySlug["metrics/wau"] != "Metric" {
+		t.Errorf("wau type = %q, want Metric", typeBySlug["metrics/wau"])
+	}
+	if typeBySlug["plain"] != "" {
+		t.Errorf("plain type = %q, want empty", typeBySlug["plain"])
+	}
+}

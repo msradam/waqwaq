@@ -12,14 +12,16 @@ import (
 )
 
 type Config struct {
-	Title   string     `json:"title"`   // brand and page-title suffix
-	Accent  string     `json:"accent"`  // a lokta pigment name or any CSS color
-	Theme   string     `json:"theme"`   // auto, a lokta stock name, or light/dark (paper/ink)
-	Addr    string     `json:"addr"`    // default listen address
-	Review  bool       `json:"review"`  // default to queuing writes for review
-	Webhook string     `json:"webhook"` // URL notified when a write is queued for review
-	Web     Web        `json:"web"`     // web-UI access control
-	Lint    lint.Rules `json:"lint"`
+	Title          string     `json:"title"`   // brand and page-title suffix; also the MCP server name
+	Accent         string     `json:"accent"`  // a lokta pigment name or any CSS color
+	Theme          string     `json:"theme"`   // auto, a lokta stock name, or light/dark (paper/ink)
+	Addr           string     `json:"addr"`    // default listen address
+	Review         bool       `json:"review"`  // default to queuing writes for review
+	Webhook        string     `json:"webhook"` // URL notified when a write is queued for review
+	Web            Web        `json:"web"`     // web-UI access control
+	Lint           lint.Rules `json:"lint"`
+	OKF            bool       `json:"okf"`             // require OKF `type` frontmatter on all pages
+	MCPDescription string     `json:"mcp_description"` // one-liner shown in MCP server instructions; defaults to a generic description
 }
 
 // accents are the lokta pigment names the accent setting accepts, each paired
@@ -97,6 +99,18 @@ func Load(path string) (Config, error) {
 	}
 	if c.Theme == "" {
 		c.Theme = "auto"
+	}
+	if c.OKF {
+		hasType := false
+		for _, f := range c.Lint.RequireFrontmatter {
+			if f == "type" {
+				hasType = true
+				break
+			}
+		}
+		if !hasType {
+			c.Lint.RequireFrontmatter = append(c.Lint.RequireFrontmatter, "type")
+		}
 	}
 	return c, nil
 }

@@ -23,7 +23,8 @@ import (
 )
 
 const baseInstructionsSuffix = `
-Read with wiki_list (page through large wikis with prefix and offset), wiki_read, wiki_search, and wiki_graph (the page link graph).
+Read with wiki_list (page through large wikis with prefix, type, or offset), wiki_read, wiki_search, and wiki_graph (the page link graph).
+wiki_list returns OKF metadata (type, description, resource, tags, timestamp) when pages carry it; filter by type to get e.g. all "BigQuery Table" docs.
 wiki_tags lists every tag with a count; pass a tag to get its pages.
 Navigate by relationship: wiki_hubs lists the most-connected pages to read first, wiki_neighbors pulls a page's linked neighbourhood in one call, wiki_path returns the chain connecting two pages, and wiki_backlinks lists what links to a page.
 Maintain the wiki with wiki_health (orphans, broken links, stale pages), wiki_recent (recent changes), wiki_history, and wiki_tags. Use wiki_health to find what needs fixing.
@@ -37,7 +38,8 @@ type Options struct {
 	ForceReview bool
 	Rules       lint.Rules
 	Search      search.Searcher
-	Title       string // display name used in serverInfo and instructions preamble
+	Title       string // display name used in serverInfo and instructions preamble; also the MCP server identity name
+	Description string // one-liner shown in instructions after the title; omit to use a generic default
 }
 
 type noArgs struct{}
@@ -45,6 +47,25 @@ type noArgs struct{}
 type pageRef struct {
 	Slug  string `json:"slug"`
 	Title string `json:"title"`
+}
+
+// okfRef extends pageRef with standard OKF metadata fields.
+type okfRef struct {
+	Slug        string   `json:"slug"`
+	Title       string   `json:"title"`
+	Type        string   `json:"type,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Resource    string   `json:"resource,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	Timestamp   string   `json:"timestamp,omitempty"`
+}
+
+// graphPageRef carries slug, title, undirected degree, and OKF type for graph nodes.
+type graphPageRef struct {
+	Slug   string `json:"slug"`
+	Title  string `json:"title"`
+	Degree int    `json:"degree"`
+	Type   string `json:"type,omitempty"`
 }
 
 // orEmpty returns a non-nil slice, so an empty MCP result serializes as []
@@ -68,7 +89,11 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 	if title == "" {
 		title = "wiki"
 	}
-	preamble := "This is " + title + ": git-backed markdown pages that humans browse and agents maintain."
+	desc := opts.Description
+	if desc == "" {
+		desc = "a knowledge base you can read, search, and write"
+	}
+	preamble := "This is " + title + ": " + desc + "."
 	instructions := preamble + baseInstructionsSuffix
 	if schema := st.Instructions(); schema != "" {
 		instructions += "\n\n--- wiki schema (CLAUDE.md) ---\n\n" + schema
@@ -89,19 +114,20 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 	}
 	type listIn struct {
 		Prefix string `json:"prefix,omitempty" jsonschema:"only pages whose slug starts with this prefix, e.g. concepts/"`
+		Type   string `json:"type,omitempty" jsonschema:"filter to pages with this OKF type value, e.g. \"BigQuery Table\" or \"Metric\""`
 		Limit  int    `json:"limit,omitempty" jsonschema:"max pages to return (default 500)"`
 		Offset int    `json:"offset,omitempty" jsonschema:"skip this many matching pages, for paging"`
 	}
 	type listPagedOut struct {
-		Pages     []pageRef `json:"pages"`
-		Total     int       `json:"total" jsonschema:"how many pages match the prefix in the whole wiki"`
-		Truncated bool      `json:"truncated,omitempty"`
+		Pages     []okfRef `json:"pages"`
+		Total     int      `json:"total" jsonschema:"how many pages match the filters in the whole wiki"`
+		Truncated bool     `json:"truncated,omitempty"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "wiki_list",
-		Description: "List wiki pages with slug and title, alphabetical by slug. Large wikis are paged: when truncated is true, total reports the full match count; narrow with prefix or page with offset.",
+		Description: "List wiki pages alphabetical by slug. Each entry includes OKF metadata (type, description, resource, tags, timestamp) when set. Filter with prefix (slug prefix) or type (OKF type value). Large wikis are paged: when truncated is true, total reports the full match count; narrow with prefix/type or page with offset.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in listIn) (*mcp.CallToolResult, listPagedOut, error) {
-		metas, err := st.List()
+		pages, err := st.ListOKF()
 		if err != nil {
 			return nil, listPagedOut{}, err
 		}
@@ -109,13 +135,20 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		if limit <= 0 {
 			limit = 500
 		}
-		out := listPagedOut{Pages: []pageRef{}}
-		for _, m := range metas {
-			if in.Prefix != "" && !strings.HasPrefix(m.Slug, in.Prefix) {
+		out := listPagedOut{Pages: []okfRef{}}
+		for _, p := range pages {
+			if in.Prefix != "" && !strings.HasPrefix(p.Slug, in.Prefix) {
+				continue
+			}
+			if in.Type != "" && !strings.EqualFold(p.Type, in.Type) {
 				continue
 			}
 			if out.Total >= in.Offset && len(out.Pages) < limit {
-				out.Pages = append(out.Pages, pageRef{Slug: m.Slug, Title: m.Title})
+				out.Pages = append(out.Pages, okfRef{
+					Slug: p.Slug, Title: p.Title, Type: p.Type,
+					Description: p.Description, Resource: p.Resource,
+					Tags: p.Tags, Timestamp: p.Timestamp,
+				})
 			}
 			out.Total++
 		}
@@ -168,14 +201,14 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		Limit int `json:"limit,omitempty" jsonschema:"max pages to return, most-connected first; 0 uses a default cap suited to large wikis"`
 	}
 	type graphOut struct {
-		Pages     []pageRef         `json:"pages"`
+		Pages     []graphPageRef    `json:"pages"`
 		Edges     []store.GraphEdge `json:"edges"`
 		Truncated bool              `json:"truncated,omitempty"`
 		Total     int               `json:"total,omitempty"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "wiki_graph",
-		Description: "Return the wiki as a graph: pages as nodes and resolved [[wikilink]] references as directed edges. Large wikis are capped to the most-connected pages; pass limit to widen or narrow, and start from wiki_hubs.",
+		Description: "Return the wiki as a graph: pages as nodes (with degree and OKF type when set) and resolved [[wikilink]] references as directed edges. Large wikis are capped to the most-connected pages; pass limit to widen or narrow, and start from wiki_hubs.",
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in graphIn) (*mcp.CallToolResult, graphOut, error) {
 		limit := in.Limit
 		if limit <= 0 {
@@ -185,9 +218,9 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		if err != nil {
 			return nil, graphOut{}, err
 		}
-		out := graphOut{Pages: []pageRef{}, Edges: orEmpty(g.Edges), Truncated: g.Truncated, Total: g.Total}
+		out := graphOut{Pages: []graphPageRef{}, Edges: orEmpty(g.Edges), Truncated: g.Truncated, Total: g.Total}
 		for _, n := range g.Nodes {
-			out.Pages = append(out.Pages, pageRef{Slug: n.Slug, Title: n.Title})
+			out.Pages = append(out.Pages, graphPageRef{Slug: n.Slug, Title: n.Title, Degree: n.Degree, Type: n.Type})
 		}
 		return nil, out, nil
 	})

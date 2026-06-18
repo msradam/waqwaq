@@ -111,6 +111,47 @@ type SearchHit struct {
 // caller can tell the results were truncated and report it.
 const SearchLimit = 50
 
+// PageOKF carries the standard OKF (Open Knowledge Format) metadata fields
+// alongside the core slug and title, for surfaces that expose typed knowledge.
+type PageOKF struct {
+	Slug        string   `json:"slug"`
+	Title       string   `json:"title"`
+	Type        string   `json:"type,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Resource    string   `json:"resource,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	Timestamp   string   `json:"timestamp,omitempty"`
+}
+
+// ListOKF returns every page's slug, title, and OKF frontmatter fields (type,
+// description, resource, tags, timestamp), using the same cached page-info as
+// List so the cost is near-zero after the first call.
+func (s *Store) ListOKF() ([]PageOKF, error) {
+	_, stats, err := s.signatureStats()
+	if err != nil {
+		return nil, err
+	}
+	infos := s.pageInfos(stats)
+	out := make([]PageOKF, 0, len(infos))
+	for slug, pi := range infos {
+		tags := pi.Tags
+		if tags == nil {
+			tags = []string{}
+		}
+		out = append(out, PageOKF{
+			Slug:        slug,
+			Title:       pi.Title,
+			Type:        pi.OKFType,
+			Description: pi.OKFDescr,
+			Resource:    pi.OKFResource,
+			Tags:        tags,
+			Timestamp:   pi.OKFTimestamp,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })
+	return out, nil
+}
+
 type GraphEdge struct {
 	From string `json:"from"`
 	To   string `json:"to"`
@@ -384,23 +425,34 @@ func (s *Store) walkStats() (string, map[string]fileStat, error) {
 // so the list, graph, and tag views share a single corpus read instead of
 // each re-reading every page.
 type pageInfo struct {
-	Fp    string
-	Title string
-	Tags  []string
-	Wiki  []wlink
-	Md    []string
+	Fp           string
+	Title        string
+	Tags         []string
+	Wiki         []wlink
+	Md           []string
+	OKFType      string // OKF "type" frontmatter field
+	OKFDescr     string // OKF "description" frontmatter field
+	OKFResource  string // OKF "resource" frontmatter field (URL)
+	OKFTimestamp string // OKF "timestamp" frontmatter field (RFC3339)
 }
 
 func derivePageInfo(raw, slug, fp string) *pageInfo {
 	fm, body := SplitFrontmatter(raw)
 	stripped := stripCode(body)
-	return &pageInfo{
+	pi := &pageInfo{
 		Fp:    fp,
 		Title: titleFrom(fm, body, slug),
 		Tags:  FrontmatterTags(fm),
 		Wiki:  wikiLinks(stripped),
 		Md:    markdownLinkTargets(stripped),
 	}
+	if fm != nil {
+		pi.OKFType, _ = fm["type"].(string)
+		pi.OKFDescr, _ = fm["description"].(string)
+		pi.OKFResource, _ = fm["resource"].(string)
+		pi.OKFTimestamp, _ = fm["timestamp"].(string)
+	}
+	return pi
 }
 
 // pageInfos returns the derived info for every page in stats, re-reading only
@@ -479,8 +531,8 @@ func (s *Store) CacheDir() (string, error) {
 	return dir, nil
 }
 
-// pages-v1 in the name lets a future cache layout change use a fresh file.
-const infoCacheName = "pages-v1.gob"
+// pages-v2 adds OKF frontmatter fields; v1 caches are silently discarded.
+const infoCacheName = "pages-v2.gob"
 
 type infoCacheData struct {
 	Pages map[string]*pageInfo
