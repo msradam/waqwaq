@@ -1,5 +1,10 @@
 ---
 title: Wonders of creation
+type: Source
+description: The aja'ib (wonders) literature, above all al-Qazwini's cosmography, which gathered and transmitted the Waq-Waq story.
+resource: https://en.wikipedia.org/wiki/The_Wonders_of_Creation
+tags: [ajaib, cosmography, qazwini, sources]
+timestamp: 2026-06-01T00:00:00Z
 ---
 
 # Wonders of creation

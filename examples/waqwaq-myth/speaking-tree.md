@@ -1,5 +1,10 @@
 ---
 title: The speaking tree
+type: Legend
+description: The oracular two-trunked tree in Ferdowsi's Shahnameh that foretold Alexander's death, descended from the Trees of the Sun and Moon.
+resource: https://en.wikipedia.org/wiki/Shahnameh
+tags: [alexander, shahnameh, prophecy, persian]
+timestamp: 2026-06-01T00:00:00Z
 ---
 
 # The speaking tree

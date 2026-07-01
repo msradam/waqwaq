@@ -1,5 +1,10 @@
 ---
 title: Islands of Waq-Waq
+type: Place
+description: A remote land or cluster of islands at the edge of the medieval world, placed variously off East Africa, in Southeast Asia, or at Japan.
+resource: https://en.wikipedia.org/wiki/Waq_Waq
+tags: [waqwaq, geography, islands, indian-ocean]
+timestamp: 2026-06-01T00:00:00Z
 ---
 
 # Islands of Waq-Waq

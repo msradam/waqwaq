@@ -1,5 +1,9 @@
 ---
 title: The name Waq-Waq
+type: Reference
+description: The competing explanations for the name, from imitation of the fruit's cry to Chinese and Austronesian origins.
+tags: [etymology, linguistics, austronesian]
+timestamp: 2026-06-01T00:00:00Z
 ---
 
 # The name Waq-Waq

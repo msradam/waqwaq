@@ -3,7 +3,6 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,44 +10,40 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/msradam/waqwaq/internal/auth"
-	"github.com/msradam/waqwaq/internal/review"
-	"github.com/msradam/waqwaq/internal/store"
+	"github.com/msradam/waqwaq/core"
 )
 
-func testSession(t *testing.T, pages map[string]string) *mcp.ClientSession {
+// connect builds a Core over a fixture wiki, serves it over an in-memory
+// transport, and returns a connected client session.
+func connect(t *testing.T) *mcp.ClientSession {
 	t.Helper()
 	dir := t.TempDir()
-	for slug, content := range pages {
-		path := filepath.Join(dir, "wiki", slug+".md")
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	write := func(rel, content string) {
+		p := filepath.Join(dir, "wiki", rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	st, err := store.New(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	q, err := review.New(st, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	reg, err := auth.Load(filepath.Join(dir, ".waqwaq", "tokens.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := New(st, q, reg, Options{})
+	write("index.md", "---\ntitle: Home\ntype: Index\n---\nSee [[tables/customers]].\n")
+	write("tables/customers.md", "---\ntitle: Customers\ntype: BigQuery Table\ntags: [sales]\n---\nLinks [[tables/orders]].\n")
+	write("tables/orders.md", "---\ntitle: Orders\ntype: BigQuery Table\ntags: [sales]\n---\nJoins [[tables/customers]].\n")
 
-	ct, srvT := mcp.NewInMemoryTransports()
-	ctx := context.Background()
-	if _, err := srv.Connect(ctx, srvT, nil); err != nil {
+	c, err := core.New(dir, true)
+	if err != nil {
 		t.Fatal(err)
 	}
-	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
-	cs, err := client.Connect(ctx, ct, nil)
+	srv := New(c, Options{Title: "TestWiki", Description: "a test wiki"})
+
+	serverT, clientT := mcp.NewInMemoryTransports()
+	ctx := context.Background()
+	if _, err := srv.Connect(ctx, serverT, nil); err != nil {
+		t.Fatal(err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0"}, nil)
+	cs, err := client.Connect(ctx, clientT, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,240 +51,197 @@ func testSession(t *testing.T, pages map[string]string) *mcp.ClientSession {
 	return cs
 }
 
-func callJSON(t *testing.T, cs *mcp.ClientSession, tool string, args map[string]any, out any) {
-	t.Helper()
-	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: tool, Arguments: args})
+func TestResourcesList(t *testing.T) {
+	cs := connect(t)
+	res, err := cs.ListResources(context.Background(), &mcp.ListResourcesParams{})
 	if err != nil {
-		t.Fatalf("%s: %v", tool, err)
+		t.Fatal(err)
+	}
+	// index.md is reserved (navigation, not a concept), so resources enumerate
+	// the 2 concept pages: customers and orders.
+	if len(res.Resources) != 2 {
+		t.Fatalf("want 2 resources, got %d", len(res.Resources))
+	}
+	got := map[string]bool{}
+	for _, r := range res.Resources {
+		got[r.URI] = true
+		if r.MIMEType != "text/markdown" {
+			t.Fatalf("resource %s wrong mime %q", r.URI, r.MIMEType)
+		}
+	}
+	if !got["wiki://page/tables/customers"] {
+		t.Fatalf("missing expected resource URI, got %v", got)
+	}
+}
+
+func TestResourceRead(t *testing.T) {
+	cs := connect(t)
+	res, err := cs.ReadResource(context.Background(), &mcp.ReadResourceParams{URI: "wiki://page/tables/customers"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Contents) != 1 {
+		t.Fatalf("want 1 content, got %d", len(res.Contents))
+	}
+	if !strings.Contains(res.Contents[0].Text, "Links") {
+		t.Fatalf("resource body missing expected text: %q", res.Contents[0].Text)
+	}
+}
+
+// callTool calls a tool and unmarshals its structured content into out.
+func callTool(t *testing.T, cs *mcp.ClientSession, name string, args map[string]any, out any) {
+	t.Helper()
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: args})
+	if err != nil {
+		t.Fatalf("call %s: %v", name, err)
 	}
 	if res.IsError {
-		t.Fatalf("%s returned a tool error: %v", tool, res.Content)
+		t.Fatalf("tool %s returned error: %+v", name, res.Content)
 	}
-	raw, err := json.Marshal(res.StructuredContent)
+	b, err := json.Marshal(res.StructuredContent)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(raw, out); err != nil {
+	if err := json.Unmarshal(b, out); err != nil {
+		t.Fatalf("unmarshal %s output: %v", name, err)
+	}
+}
+
+func TestToolWikiList(t *testing.T) {
+	cs := connect(t)
+	var out struct {
+		Pages     []core.PageMeta `json:"pages"`
+		Total     int             `json:"total"`
+		Truncated bool            `json:"truncated"`
+	}
+	callTool(t, cs, "wiki_list", map[string]any{"type": "BigQuery Table"}, &out)
+	if out.Total != 2 {
+		t.Fatalf("want 2 BigQuery Table pages, got %d", out.Total)
+	}
+}
+
+func TestToolWikiReadInlineEdges(t *testing.T) {
+	cs := connect(t)
+	var page core.Page
+	callTool(t, cs, "wiki_read", map[string]any{"slug": "tables/customers"}, &page)
+	if len(page.Outbound) == 0 || page.Outbound[0].Slug != "tables/orders" {
+		t.Fatalf("expected outbound to orders, got %+v", page.Outbound)
+	}
+	if len(page.Inbound) == 0 {
+		t.Fatalf("expected inbound edges, got none")
+	}
+}
+
+func TestToolWikiSearch(t *testing.T) {
+	cs := connect(t)
+	var out struct {
+		Hits []core.Match `json:"hits"`
+	}
+	callTool(t, cs, "wiki_search", map[string]any{"query": "Joins"}, &out)
+	if len(out.Hits) != 1 || out.Hits[0].Slug != "tables/orders" {
+		t.Fatalf("search: want orders, got %+v", out.Hits)
+	}
+}
+
+func TestToolWikiHubs(t *testing.T) {
+	cs := connect(t)
+	var out struct {
+		Hubs []core.GraphNode `json:"hubs"`
+	}
+	callTool(t, cs, "wiki_hubs", map[string]any{"limit": 1}, &out)
+	if len(out.Hubs) != 1 || out.Hubs[0].Slug != "tables/customers" {
+		t.Fatalf("top hub should be customers, got %+v", out.Hubs)
+	}
+}
+
+func TestToolWikiInfo(t *testing.T) {
+	cs := connect(t)
+	var out struct {
+		Title     string `json:"title"`
+		Pages     int    `json:"pages"`
+		Versioned bool   `json:"versioned"`
+	}
+	callTool(t, cs, "wiki_info", map[string]any{}, &out)
+	if out.Title != "TestWiki" {
+		t.Fatalf("wiki_info title = %q, want TestWiki", out.Title)
+	}
+	if out.Pages != 2 { // index reserved; customers + orders are concepts
+		t.Fatalf("wiki_info pages = %d, want 2", out.Pages)
+	}
+}
+
+func TestToolWikiHistoryVersioned(t *testing.T) {
+	cs := connect(t)
+	var out struct {
+		Versioned bool          `json:"versioned"`
+		Commits   []core.Commit `json:"commits"`
+	}
+	callTool(t, cs, "wiki_history", map[string]any{"slug": "index"}, &out)
+	// The fixture is a bare temp dir, not a git repo.
+	if out.Versioned {
+		t.Fatal("non-git fixture should report versioned=false")
+	}
+	if len(out.Commits) != 0 {
+		t.Fatalf("want no commits, got %d", len(out.Commits))
+	}
+}
+
+func TestHubsAndGraphTitles(t *testing.T) {
+	cs := connect(t)
+	// Hubs must exclude reserved index.md and never emit an empty title.
+	var hubs struct {
+		Hubs []core.GraphNode `json:"hubs"`
+	}
+	callTool(t, cs, "wiki_hubs", map[string]any{"limit": 10}, &hubs)
+	for _, h := range hubs.Hubs {
+		if h.Slug == "index" {
+			t.Fatal("wiki_hubs must exclude reserved index.md")
+		}
+		if h.Title == "" {
+			t.Fatalf("hub %q has empty title", h.Slug)
+		}
+	}
+	// The full graph keeps index as a node, but with a non-empty (fallback) title.
+	var g core.Graph
+	callTool(t, cs, "wiki_graph", map[string]any{}, &g)
+	for _, n := range g.Nodes {
+		if n.Title == "" {
+			t.Fatalf("graph node %q has empty title", n.Slug)
+		}
+	}
+}
+
+func TestToolWikiRecent(t *testing.T) {
+	cs := connect(t)
+	var out struct {
+		Pages []core.PageMeta `json:"pages"`
+	}
+	callTool(t, cs, "wiki_recent", map[string]any{"limit": 5}, &out)
+	// Fixture pages carry no timestamp, so this just confirms the tool returns the
+	// concept pages without error and excludes the reserved index.
+	if len(out.Pages) != 2 {
+		t.Fatalf("wiki_recent: want 2 concept pages, got %d", len(out.Pages))
+	}
+	for _, p := range out.Pages {
+		if p.Slug == "index" {
+			t.Fatal("wiki_recent must exclude reserved index.md")
+		}
+	}
+}
+
+func TestNoMutationTools(t *testing.T) {
+	cs := connect(t)
+	res, err := cs.ListTools(context.Background(), &mcp.ListToolsParams{})
+	if err != nil {
 		t.Fatal(err)
 	}
-}
-
-func page(title, tags string) string {
-	return fmt.Sprintf("---\ntitle: %s\ntags: [%s]\n---\n\n# %s\n\nBody.\n", title, tags, title)
-}
-
-func TestWikiListPaging(t *testing.T) {
-	pages := map[string]string{}
-	for i := 0; i < 7; i++ {
-		pages[fmt.Sprintf("a/p%d", i)] = page(fmt.Sprintf("A%d", i), "x")
-	}
-	pages["b/solo"] = page("Solo", "y")
-	cs := testSession(t, pages)
-
-	type listResult struct {
-		Pages []struct {
-			Slug  string `json:"slug"`
-			Title string `json:"title"`
-		} `json:"pages"`
-		Total     int  `json:"total"`
-		Truncated bool `json:"truncated"`
-	}
-	var all listResult
-	callJSON(t, cs, "wiki_list", nil, &all)
-	if all.Total != 8 || len(all.Pages) != 8 || all.Truncated {
-		t.Fatalf("unfiltered list: total=%d pages=%d truncated=%v", all.Total, len(all.Pages), all.Truncated)
-	}
-
-	var pre listResult
-	callJSON(t, cs, "wiki_list", map[string]any{"prefix": "a/"}, &pre)
-	if pre.Total != 7 || len(pre.Pages) != 7 {
-		t.Fatalf("prefix list: total=%d pages=%d", pre.Total, len(pre.Pages))
-	}
-
-	var lim listResult
-	callJSON(t, cs, "wiki_list", map[string]any{"prefix": "a/", "limit": 3}, &lim)
-	if lim.Total != 7 || len(lim.Pages) != 3 || !lim.Truncated {
-		t.Fatalf("limited list: total=%d pages=%d truncated=%v", lim.Total, len(lim.Pages), lim.Truncated)
-	}
-	if lim.Pages[0].Slug != "a/p0" {
-		t.Fatalf("first page = %q", lim.Pages[0].Slug)
-	}
-
-	var off listResult
-	callJSON(t, cs, "wiki_list", map[string]any{"prefix": "a/", "limit": 3, "offset": 6}, &off)
-	if off.Total != 7 || len(off.Pages) != 1 || off.Truncated {
-		t.Fatalf("offset list: total=%d pages=%d truncated=%v", off.Total, len(off.Pages), off.Truncated)
-	}
-	if off.Pages[0].Slug != "a/p6" {
-		t.Fatalf("offset page = %q", off.Pages[0].Slug)
-	}
-}
-
-func TestWikiTagsCountsAndDrillDown(t *testing.T) {
-	cs := testSession(t, map[string]string{
-		"one":   page("One", "infra, api"),
-		"two":   page("Two", "infra"),
-		"three": page("Three", "api"),
-	})
-
-	var counts struct {
-		Tags []struct {
-			Tag   string `json:"tag"`
-			Count int    `json:"count"`
-		} `json:"tags"`
-		Pages []any `json:"pages"`
-	}
-	callJSON(t, cs, "wiki_tags", nil, &counts)
-	if len(counts.Tags) != 2 || len(counts.Pages) != 0 {
-		t.Fatalf("tag counts: %+v", counts)
-	}
-	if counts.Tags[0].Tag != "api" || counts.Tags[0].Count != 2 || counts.Tags[1].Tag != "infra" || counts.Tags[1].Count != 2 {
-		t.Fatalf("tag counts: %+v", counts.Tags)
-	}
-
-	type tagPages struct {
-		Pages []struct {
-			Slug string `json:"slug"`
-		} `json:"pages"`
-	}
-	var infra tagPages
-	callJSON(t, cs, "wiki_tags", map[string]any{"tag": "infra"}, &infra)
-	if len(infra.Pages) != 2 {
-		t.Fatalf("infra pages: %+v", infra.Pages)
-	}
-	var unknown tagPages
-	callJSON(t, cs, "wiki_tags", map[string]any{"tag": "nope"}, &unknown)
-	if unknown.Pages == nil || len(unknown.Pages) != 0 {
-		t.Fatalf("unknown tag pages: %+v", unknown.Pages)
-	}
-}
-
-func TestEmptyResultsSerializeAsArrays(t *testing.T) {
-	cs := testSession(t, map[string]string{
-		"index": "---\ntitle: Index\n---\n\n# Index\n\nNo links here.\n",
-	})
-	for tool, args := range map[string]map[string]any{
-		"wiki_health":    nil,
-		"wiki_backlinks": {"slug": "index"},
-		"wiki_neighbors": {"slug": "index"},
-		"wiki_hubs":      nil,
-		"wiki_list_raw":  nil,
-		"wiki_search":    {"query": "nosuchwordanywhere"},
-	} {
-		res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: tool, Arguments: args})
-		if err != nil || res.IsError {
-			t.Fatalf("%s: err=%v isError=%v", tool, err, res != nil && res.IsError)
+	for _, tool := range res.Tools {
+		if strings.Contains(tool.Name, "write") || strings.Contains(tool.Name, "delete") ||
+			strings.Contains(tool.Name, "ingest") || strings.Contains(tool.Name, "edit") {
+			t.Fatalf("read-only baseline must expose no mutation tool, found %q", tool.Name)
 		}
-		raw, err := json.Marshal(res.StructuredContent)
-		if err != nil {
-			t.Fatal(err)
+		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
+			t.Fatalf("tool %q missing readOnlyHint", tool.Name)
 		}
-		if strings.Contains(string(raw), "null") {
-			t.Errorf("%s emits null for an empty list: %s", tool, raw)
-		}
-	}
-}
-
-func okfPage(title, okfType, description, resource string) string {
-	return fmt.Sprintf("---\ntitle: %s\ntype: %s\ndescription: %s\nresource: %s\ntags: [data]\ntimestamp: 2026-06-01T00:00:00Z\n---\n\n# %s\n", title, okfType, description, resource, title)
-}
-
-func TestOKFListAndTypeFilter(t *testing.T) {
-	cs := testSession(t, map[string]string{
-		"datasets/sales":   okfPage("Sales Dataset", "Dataset", "Order data", "https://example.com/sales"),
-		"tables/orders":    okfPage("Orders", "BigQuery Table", "One row per order", "https://example.com/orders"),
-		"tables/customers": okfPage("Customers", "BigQuery Table", "Customer master", "https://example.com/customers"),
-		"metrics/wau":      okfPage("Weekly Active Users", "Metric", "WAU definition", "https://example.com/wau"),
-	})
-
-	type okfEntry struct {
-		Slug        string   `json:"slug"`
-		Title       string   `json:"title"`
-		Type        string   `json:"type"`
-		Description string   `json:"description"`
-		Resource    string   `json:"resource"`
-		Tags        []string `json:"tags"`
-		Timestamp   string   `json:"timestamp"`
-	}
-	type listResult struct {
-		Pages     []okfEntry `json:"pages"`
-		Total     int        `json:"total"`
-		Truncated bool       `json:"truncated"`
-	}
-
-	// All pages include OKF fields.
-	var all listResult
-	callJSON(t, cs, "wiki_list", nil, &all)
-	if all.Total != 4 {
-		t.Fatalf("total = %d, want 4", all.Total)
-	}
-	for _, p := range all.Pages {
-		if p.Type == "" {
-			t.Errorf("page %q missing type", p.Slug)
-		}
-		if p.Resource == "" {
-			t.Errorf("page %q missing resource", p.Slug)
-		}
-		if p.Timestamp == "" {
-			t.Errorf("page %q missing timestamp", p.Slug)
-		}
-	}
-
-	// Type filter: only BigQuery Table pages.
-	var tables listResult
-	callJSON(t, cs, "wiki_list", map[string]any{"type": "BigQuery Table"}, &tables)
-	if tables.Total != 2 {
-		t.Fatalf("type filter total = %d, want 2", tables.Total)
-	}
-	for _, p := range tables.Pages {
-		if p.Type != "BigQuery Table" {
-			t.Errorf("type filter returned %q with type %q", p.Slug, p.Type)
-		}
-	}
-
-	// Type filter is case-insensitive.
-	var lower listResult
-	callJSON(t, cs, "wiki_list", map[string]any{"type": "bigquery table"}, &lower)
-	if lower.Total != 2 {
-		t.Fatalf("case-insensitive type filter total = %d, want 2", lower.Total)
-	}
-
-	// Type filter + prefix together.
-	var narrow listResult
-	callJSON(t, cs, "wiki_list", map[string]any{"type": "Dataset", "prefix": "datasets/"}, &narrow)
-	if narrow.Total != 1 || narrow.Pages[0].Slug != "datasets/sales" {
-		t.Fatalf("type+prefix filter: %+v", narrow)
-	}
-}
-
-func TestOKFGraphNodesIncludeType(t *testing.T) {
-	cs := testSession(t, map[string]string{
-		"tables/orders": okfPage("Orders", "BigQuery Table", "One row per order", "https://example.com/orders"),
-		"metrics/wau":   okfPage("WAU", "Metric", "Weekly active users", "https://example.com/wau"),
-		"plain":         "---\ntitle: Plain\n---\n\nNo OKF type.\n",
-	})
-
-	type node struct {
-		Slug   string `json:"slug"`
-		Type   string `json:"type"`
-		Degree int    `json:"degree"`
-	}
-	var result struct {
-		Pages []node `json:"pages"`
-	}
-	callJSON(t, cs, "wiki_graph", nil, &result)
-
-	typeBySlug := make(map[string]string, len(result.Pages))
-	for _, p := range result.Pages {
-		typeBySlug[p.Slug] = p.Type
-	}
-	if typeBySlug["tables/orders"] != "BigQuery Table" {
-		t.Errorf("orders type = %q, want BigQuery Table", typeBySlug["tables/orders"])
-	}
-	if typeBySlug["metrics/wau"] != "Metric" {
-		t.Errorf("wau type = %q, want Metric", typeBySlug["metrics/wau"])
-	}
-	if typeBySlug["plain"] != "" {
-		t.Errorf("plain type = %q, want empty", typeBySlug["plain"])
 	}
 }

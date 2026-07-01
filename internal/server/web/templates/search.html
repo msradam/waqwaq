@@ -1,0 +1,25 @@
+{{define "content"}}
+<div class="listing">
+  <h1>Search</h1>
+  <form class="searchform" action="/search" method="get">
+    <input type="search" name="q" value="{{.Query}}" placeholder="Text to find…" autofocus>
+    <input type="text" name="type" value="{{.TypeFilter}}" placeholder="type (optional)">
+    <input type="text" name="tag" value="{{.TagFilter}}" placeholder="tag (optional)">
+    <label><input type="checkbox" name="regex" {{if .Regex}}checked{{end}}> regex</label>
+    <button type="submit">Search</button>
+  </form>
+  {{if .Query}}
+    <p class="muted">{{len .Hits}} result{{if ne (len .Hits) 1}}s{{end}}</p>
+    <ul class="results">
+    {{range .Hits}}
+      <li>
+        <a href="/wiki/{{.Slug}}">{{.Title}}</a>
+        {{if .Type}}<span class="pill">{{.Type}}</span>{{end}}
+        {{range .Tags}}<span class="tag">{{.}}</span>{{end}}
+        <p class="snippet">{{.Context}}</p>
+      </li>
+    {{end}}
+    </ul>
+  {{end}}
+</div>
+{{end}}

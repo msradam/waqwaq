@@ -1,5 +1,9 @@
 ---
 title: Sources and further reading
+type: Reference
+description: The medieval primary sources and modern scholarship behind the accounts in this wiki.
+tags: [sources, bibliography, references]
+timestamp: 2026-06-01T00:00:00Z
 ---
 
 # Sources and further reading

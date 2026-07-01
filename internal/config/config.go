@@ -1,116 +1,38 @@
-// Package config loads optional per-wiki settings from .waqwaq/config.json. A
-// missing file yields built-in defaults.
+// Package config loads optional per-wiki settings from .waqwaq/config.json.
+// A missing file yields built-in defaults. This baseline is read-only, so there
+// is no auth, theme, lint, webhook, or review configuration: just identity.
+//
+// waqwaq is an OKF server and enforces OKF compliance by default. `"lenient":
+// true` opts a wiki out of enforcement, to serve plain markdown that is not an
+// OKF bundle.
 package config
 
 import (
 	"encoding/json"
 	"errors"
 	"os"
-	"strings"
-
-	"github.com/msradam/waqwaq/internal/lint"
+	"path/filepath"
 )
 
 type Config struct {
-	Title          string     `json:"title"`   // brand and page-title suffix; also the MCP server name
-	Accent         string     `json:"accent"`  // a lokta pigment name or any CSS color
-	Theme          string     `json:"theme"`   // auto, a lokta stock name, or light/dark (paper/ink)
-	Addr           string     `json:"addr"`    // default listen address
-	Review         bool       `json:"review"`  // default to queuing writes for review
-	Webhook        string     `json:"webhook"` // URL notified when a write is queued for review
-	Web            Web        `json:"web"`     // web-UI access control
-	Lint           lint.Rules `json:"lint"`
-	OKF            bool       `json:"okf"`             // require OKF `type` frontmatter on all pages
-	MCPDescription string     `json:"mcp_description"` // one-liner shown in MCP server instructions; defaults to a generic description
+	Title       string `json:"title"`           // display name and MCP server identity
+	Description string `json:"mcp_description"` // one-liner for MCP instructions
+	Addr        string `json:"addr"`            // default listen address for serve
+	Lenient     bool   `json:"lenient"`         // serve non-OKF-compliant markdown (opt out of enforcement)
 }
 
-// accents are the lokta pigment names the accent setting accepts, each paired
-// with whether an accent ground in that pigment needs light text to stay
-// readable. The *-light variants are the dial options lokta provides for the
-// dark stocks.
-var accents = map[string]struct {
-	color     string
-	lightText bool
-}{
-	"marigold":       {"#FBBC0E", false},
-	"peach":          {"#E7A079", false},
-	"lavender":       {"#A99CB3", false},
-	"madder":         {"#8E3B30", true},
-	"walnut":         {"#4E3B29", true},
-	"turmeric":       {"#7A5A12", true},
-	"lac":            {"#9B2D4D", true},
-	"aubergine":      {"#6B4E8E", true},
-	"cinnabar":       {"#C23A26", true},
-	"celadon":        {"#6E8B6F", true},
-	"indigo":         {"#2E3E5C", true},
-	"madder-light":   {"#DE9684", false},
-	"walnut-light":   {"#C9A982", false},
-	"turmeric-light": {"#E0B452", false},
-	"lac-light":      {"#D98098", false},
-}
-
-// ResolveAccent maps a named lokta pigment to its color and the on-accent text
-// color override ("" keeps the stock's dark ink). Any other non-empty value
-// passes through as a CSS color with the default dark text.
-func ResolveAccent(v string) (color, textOn string) {
-	a, ok := accents[strings.ToLower(strings.TrimSpace(v))]
-	if !ok {
-		return v, ""
-	}
-	if a.lightText {
-		return a.color, "#FAF8EA"
-	}
-	return a.color, ""
-}
-
-// Web configures web-UI access control. When ProxyHeader is set, identity comes
-// from that reverse-proxy header (delegate SSO to the proxy); otherwise the UI
-// is open and trusts local/loopback access.
-type Web struct {
-	ProxyHeader string    `json:"proxy_header"`
-	DefaultRole string    `json:"default_role"` // viewer | editor | admin
-	Admins      []string  `json:"admins"`
-	Editors     []string  `json:"editors"`
-	Users       []WebUser `json:"users"` // built-in login, when no reverse proxy
-}
-
-type WebUser struct {
-	Name     string `json:"name"`
-	Password string `json:"password"` // bcrypt hash, generate with `waqwaq passwd`
-	Role     string `json:"role"`     // viewer | editor | admin
-}
-
-func Default() Config {
-	return Config{Theme: "auto"}
-}
-
-// Load reads a config file. A missing file returns defaults.
-func Load(path string) (Config, error) {
-	c := Default()
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return c, nil
-	}
+// Load reads <dir>/.waqwaq/config.json. A missing file is not an error.
+func Load(dir string) (Config, error) {
+	var c Config
+	data, err := os.ReadFile(filepath.Join(dir, ".waqwaq", "config.json"))
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return c, nil
+		}
 		return c, err
 	}
 	if err := json.Unmarshal(data, &c); err != nil {
 		return c, err
-	}
-	if c.Theme == "" {
-		c.Theme = "auto"
-	}
-	if c.OKF {
-		hasType := false
-		for _, f := range c.Lint.RequireFrontmatter {
-			if f == "type" {
-				hasType = true
-				break
-			}
-		}
-		if !hasType {
-			c.Lint.RequireFrontmatter = append(c.Lint.RequireFrontmatter, "type")
-		}
 	}
 	return c, nil
 }

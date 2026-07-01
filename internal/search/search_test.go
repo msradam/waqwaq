@@ -1,79 +1,114 @@
-//go:build !zos && !nofts
-
 package search
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
-
-	"github.com/msradam/waqwaq/internal/store"
 )
 
-func TestQualifiedIdentifierSearch(t *testing.T) {
-	st, err := store.New(t.TempDir())
-	if err != nil {
+func writeFile(t *testing.T, dir, rel, content string) {
+	t.Helper()
+	p := filepath.Join(dir, rel)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.Write("ctx", "---\ntitle: Context\n---\nThe Context is pooled with sync.Pool and reset per request.\n", "", "m"); err != nil {
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
-	}
-	if err := st.Write("mcp", "---\ntitle: MCP\n---\nThe wiki_write tool commits a page.\n", "", "m"); err != nil {
-		t.Fatal(err)
-	}
-	ix, err := New(st)
-	if err != nil {
-		t.Skipf("FTS5 unavailable in this build: %v", err)
-	}
-	defer ix.Close()
-
-	for _, q := range []string{"sync.Pool", "sync_pool", "Context.reset()"} {
-		if hits, _ := ix.Search(q); len(hits) != 1 || hits[0].Slug != "ctx" {
-			t.Fatalf("search %q = %+v, want one hit on ctx", q, hits)
-		}
-	}
-	if hits, _ := ix.Search("wiki_write"); len(hits) != 1 || hits[0].Slug != "mcp" {
-		t.Fatalf("search 'wiki_write' = %+v, want one hit on mcp", hits)
 	}
 }
 
-func TestFTSSearchAndRefresh(t *testing.T) {
-	st, err := store.New(t.TempDir())
+func TestSearchLiteral(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.md", "the quick brown fox")
+	writeFile(t, dir, "sub/b.md", "lazy dog sleeps")
+	writeFile(t, dir, "c.md", "nothing here")
+
+	res, err := Search(dir, "lazy dog", false, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.Write("alpha", "---\ntitle: Alpha\n---\nthe quick brown fox\n", "", "m"); err != nil {
-		t.Fatal(err)
+	if len(res) != 1 {
+		t.Fatalf("want 1 result, got %d", len(res))
 	}
-	if err := st.Write("beta", "---\ntitle: Beta\n---\nlazy dog sleeps\n", "", "m"); err != nil {
-		t.Fatal(err)
+	if filepath.Base(res[0].Path) != "b.md" {
+		t.Fatalf("want b.md, got %s", res[0].Path)
 	}
+	if res[0].Context == "" {
+		t.Fatal("expected a context snippet")
+	}
+}
 
-	ix, err := New(st)
+func TestSearchKeywordAND(t *testing.T) {
+	dir := t.TempDir()
+	// Words scattered, out of order, mixed case — a whole-string substring match
+	// would miss this; keyword-AND finds it.
+	writeFile(t, dir, "a.md", "The total daily OUTPUT value is summed per day.")
+	writeFile(t, dir, "b.md", "output only, no total here")
+
+	res, err := Search(dir, "output value per day", false, 10)
 	if err != nil {
-		t.Skipf("FTS5 unavailable in this build: %v", err)
+		t.Fatal(err)
 	}
-	defer ix.Close()
+	if len(res) != 1 || filepath.Base(res[0].Path) != "a.md" {
+		t.Fatalf("keyword-AND should match only a.md, got %v", res)
+	}
 
-	hits, err := ix.Search("quick")
+	// A term absent from every file yields nothing.
+	none, _ := Search(dir, "output value nonexistentword", false, 10)
+	if len(none) != 0 {
+		t.Fatalf("a missing term should exclude the file, got %v", none)
+	}
+}
+
+func TestSearchRegex(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.md", "order 12345 shipped")
+	writeFile(t, dir, "b.md", "order abc not a number")
+
+	res, err := Search(dir, `order \d+`, true, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(hits) != 1 || hits[0].Slug != "alpha" {
-		t.Fatalf("search 'quick' = %+v, want one hit on alpha", hits)
+	if len(res) != 1 || filepath.Base(res[0].Path) != "a.md" {
+		t.Fatalf("regex should match only a.md, got %v", res)
 	}
+}
 
-	if hits, _ := ix.Search("laz"); len(hits) != 1 || hits[0].Slug != "beta" {
-		t.Fatalf("prefix 'laz' = %+v, want one hit on beta", hits)
+func TestSearchBadRegex(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Search(dir, "(unclosed", true, 10); err == nil {
+		t.Fatal("expected compile error for bad regex")
 	}
+}
 
-	// editing a page changes the signature, so the index rebuilds on next query
-	if err := st.Write("beta", "---\ntitle: Beta\n---\nlazy dog runs fast\n", "", "m"); err != nil {
+func TestSearchSkipsDotDirsAndBinary(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, ".git/config.md", "secret match target")
+	writeFile(t, dir, "bin.md", "text\x00with nul match target")
+	writeFile(t, dir, "ok.md", "match target here")
+
+	res, err := Search(dir, "match target", false, 10)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if hits, _ := ix.Search("runs"); len(hits) != 1 || hits[0].Slug != "beta" {
-		t.Fatalf("after edit, search 'runs' = %+v, want one hit on beta", hits)
+	if len(res) != 1 || filepath.Base(res[0].Path) != "ok.md" {
+		t.Fatalf("want only ok.md, got %v", res)
 	}
+}
 
-	if hits, _ := ix.Search("   "); hits != nil {
-		t.Fatalf("blank query should return no hits, got %+v", hits)
+func TestSearchLimitAndSort(t *testing.T) {
+	dir := t.TempDir()
+	for _, n := range []string{"c.md", "a.md", "b.md"} {
+		writeFile(t, dir, n, "common")
+	}
+	res, err := Search(dir, "common", false, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 2 {
+		t.Fatalf("want 2 (limit), got %d", len(res))
+	}
+	if filepath.Base(res[0].Path) != "a.md" || filepath.Base(res[1].Path) != "b.md" {
+		t.Fatalf("results not sorted by path: %v", res)
 	}
 }

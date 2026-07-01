@@ -1,102 +1,55 @@
-// Package mcpserver exposes the wiki over MCP using the Karpathy wiki_* tool
-// convention. Identity comes from the caller's bearer token: trusted principals
-// commit directly, others have their writes queued as proposals for human
-// review. Read tools are always available; write tools require read-write mode.
+// Package mcpserver exposes a read-only OKF wiki over MCP. Resources are the
+// primary read interface: resource template wiki://page/{slug} reads any page
+// straight from disk, and resources/list enumerates pages (frontmatter-only) by
+// re-walking the tree per call. Tools cover the genuine queries agents make —
+// list, search, backlinks, neighbors, tags, hubs, graph, history — plus a
+// wiki_read tool so a client without the resources primitive can still navigate.
+//
+// There are no mutation tools. This baseline is read-only across every surface.
 package mcpserver
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"os"
-	"sort"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/msradam/waqwaq/internal/auth"
-	"github.com/msradam/waqwaq/internal/lint"
-	"github.com/msradam/waqwaq/internal/review"
-	"github.com/msradam/waqwaq/internal/search"
-	"github.com/msradam/waqwaq/internal/store"
+	"github.com/msradam/waqwaq/core"
 	"github.com/msradam/waqwaq/internal/version"
 )
 
-const baseInstructionsSuffix = `
-Read with wiki_list (page through large wikis with prefix, type, or offset), wiki_read, wiki_search, and wiki_graph (the page link graph).
-wiki_list returns OKF metadata (type, description, resource, tags, timestamp) when pages carry it; filter by type to get e.g. all "BigQuery Table" docs.
-wiki_tags lists every tag with a count; pass a tag to get its pages.
-Navigate by relationship: wiki_hubs lists the most-connected pages to read first, wiki_neighbors pulls a page's linked neighbourhood in one call, wiki_path returns the chain connecting two pages, and wiki_backlinks lists what links to a page.
-Maintain the wiki with wiki_health (orphans, broken links, stale pages), wiki_recent (recent changes), wiki_history, and wiki_tags. Use wiki_health to find what needs fixing.
-Raw documents to synthesise from live under raw/: list them with wiki_list_raw, read with wiki_read_raw, add with wiki_ingest, remove with wiki_delete_raw.
-Create or replace pages with wiki_write. Each page needs YAML frontmatter with a title, and links other pages with [[slug]] or [[slug|label]] wikilinks. Remove a page with wiki_delete (recoverable from git history).
-wiki_lint dry-runs the checks. A missing title blocks a write; unresolved wikilinks are warnings.
-Depending on your access, a write either commits straight to git or is queued as a proposal for a human to approve. Check the status field returned by wiki_write, and list the queue with wiki_list_proposals.`
+const uriPrefix = "wiki://page/"
 
+const instructionsSuffix = `
+This is a read-only OKF (Open Knowledge Format) wiki. Pages are markdown with YAML frontmatter (type, description, resource, tags, timestamp).
+
+Read a page with the resource wiki://page/{slug} or the wiki_read tool; both return the body plus inlined outbound and inbound links (each with slug, title, and OKF type) so you can navigate without a read per neighbor.
+
+Confirm which wiki you are connected to with wiki_info.
+Orient in an unfamiliar wiki: start at wiki_read("index"), or wiki_hubs to see the most-connected pages. Discover by filter with wiki_list (prefix, type, or tag; paged via offset with total and truncated in the result). Follow relationships with wiki_neighbors (a page's linked neighbourhood in one call) and wiki_backlinks. wiki_tags lists every tag with a count. wiki_recent lists pages by OKF timestamp, freshest first. wiki_search is keyword search: every whitespace-separated term must appear in the page (case-insensitive), so multi-word queries work; set regex=true for a pattern instead. Narrow search by type and tag. wiki_graph returns the whole page link graph.
+
+This wiki cannot be written to over MCP.`
+
+// Options configures the MCP server identity and OKF behavior.
 type Options struct {
-	ReadOnly    bool
-	ForceReview bool
-	Rules       lint.Rules
-	Search      search.Searcher
-	Title       string // display name used in serverInfo and instructions preamble; also the MCP server identity name
-	Description string // one-liner shown in instructions after the title; omit to use a generic default
+	Title        string // server name/identity; also shown in instructions
+	Description  string // one-liner after the title
+	Instructions string // optional CLAUDE.md schema appended to instructions
 }
 
-type noArgs struct{}
-
-type pageRef struct {
-	Slug  string `json:"slug"`
-	Title string `json:"title"`
-}
-
-// okfRef extends pageRef with standard OKF metadata fields.
-type okfRef struct {
-	Slug        string   `json:"slug"`
-	Title       string   `json:"title"`
-	Type        string   `json:"type,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Resource    string   `json:"resource,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	Timestamp   string   `json:"timestamp,omitempty"`
-}
-
-// graphPageRef carries slug, title, undirected degree, and OKF type for graph nodes.
-type graphPageRef struct {
-	Slug   string `json:"slug"`
-	Title  string `json:"title"`
-	Degree int    `json:"degree"`
-	Type   string `json:"type,omitempty"`
-}
-
-// orEmpty returns a non-nil slice, so an empty MCP result serializes as []
-// rather than null and a client never has to special-case the two.
-func orEmpty[T any](s []T) []T {
-	if s == nil {
-		return []T{}
-	}
-	return s
-}
-
-// ServeStdio runs an MCP server over stdin/stdout, the transport agents use to
-// launch a local MCP server as a subprocess. It blocks until the client closes
-// the connection. Nothing may be written to stdout except the protocol.
-func ServeStdio(ctx context.Context, srv *mcp.Server) error {
-	return srv.Run(ctx, &mcp.StdioTransport{})
-}
-
-func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mcp.Server {
+// New builds an MCP server backed by a read-only Core.
+func New(c core.Core, opts Options) *mcp.Server {
 	title := opts.Title
 	if title == "" {
 		title = "wiki"
 	}
 	desc := opts.Description
 	if desc == "" {
-		desc = "a knowledge base you can read, search, and write"
+		desc = "a read-only OKF knowledge base you can read, search, and navigate"
 	}
-	preamble := "This is " + title + ": " + desc + "."
-	instructions := preamble + baseInstructionsSuffix
-	if schema := st.Instructions(); schema != "" {
-		instructions += "\n\n--- wiki schema (CLAUDE.md) ---\n\n" + schema
+	instructions := "This is " + title + ": " + desc + "." + instructionsSuffix
+	if opts.Instructions != "" {
+		instructions += "\n\n--- wiki schema (CLAUDE.md) ---\n\n" + opts.Instructions
 	}
 
 	s := mcp.NewServer(
@@ -104,521 +57,299 @@ func New(st *store.Store, q *review.Queue, reg *auth.Registry, opts Options) *mc
 		&mcp.ServerOptions{Instructions: instructions},
 	)
 
-	var searcher search.Searcher = st
-	if opts.Search != nil {
-		searcher = opts.Search
-	}
+	registerResources(s, c)
+	registerTools(s, c, title, desc)
+	return s
+}
 
-	type listOut struct {
-		Pages []pageRef `json:"pages"`
-	}
+func slugFromURI(uri string) string {
+	return strings.TrimPrefix(uri, uriPrefix)
+}
+
+func uriForSlug(slug string) string {
+	return uriPrefix + slug
+}
+
+// registerResources wires the read template and a stateless resources/list.
+func registerResources(s *mcp.Server, c core.Core) {
+	s.AddResourceTemplate(&mcp.ResourceTemplate{
+		Name:        "page",
+		Title:       "Wiki page",
+		Description: "An OKF wiki page by slug, e.g. wiki://page/tables/customers. Returns the markdown body only. For navigation prefer the wiki_read tool, which also returns the parsed frontmatter (type, tags, ...) and the resolved inbound/outbound links; this resource is the plain prose.",
+		MIMEType:    "text/markdown",
+		URITemplate: uriPrefix + "{+slug}",
+	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		slug := slugFromURI(req.Params.URI)
+		page, err := c.Read(ctx, slug)
+		if err != nil {
+			return nil, err
+		}
+		return &mcp.ReadResourceResult{
+			Contents: []*mcp.ResourceContents{{
+				URI:      req.Params.URI,
+				MIMEType: "text/markdown",
+				Text:     page.Body,
+			}},
+		}, nil
+	})
+
+	// Serve resources/list by re-walking the tree each call, so the list always
+	// reflects the current filesystem with no cached snapshot (statelessness).
+	// ponytail: no cursor pagination here — the list is frontmatter-only and
+	// cheap; agents that need filtered/paged enumeration use the wiki_list tool.
+	s.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			if method != "resources/list" {
+				return next(ctx, method, req)
+			}
+			res, err := c.List(ctx, "", "", "", 0, 0)
+			if err != nil {
+				return nil, err
+			}
+			out := &mcp.ListResourcesResult{Resources: make([]*mcp.Resource, 0, len(res.Items))}
+			for _, m := range res.Items {
+				out.Resources = append(out.Resources, &mcp.Resource{
+					URI:         uriForSlug(m.Slug),
+					Name:        m.Slug,
+					Title:       m.Title,
+					Description: m.Description,
+					MIMEType:    "text/markdown",
+				})
+			}
+			return out, nil
+		}
+	})
+}
+
+var readOnly = &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true}
+
+func registerTools(s *mcp.Server, c core.Core, title, description string) {
 	type listIn struct {
-		Prefix string `json:"prefix,omitempty" jsonschema:"only pages whose slug starts with this prefix, e.g. concepts/"`
-		Type   string `json:"type,omitempty" jsonschema:"filter to pages with this OKF type value, e.g. \"BigQuery Table\" or \"Metric\""`
+		Prefix string `json:"prefix,omitempty" jsonschema:"only pages whose slug starts with this prefix, e.g. tables/"`
+		Type   string `json:"type,omitempty" jsonschema:"filter to pages with this OKF type, e.g. BigQuery Table"`
+		Tag    string `json:"tag,omitempty" jsonschema:"filter to pages carrying this tag"`
 		Limit  int    `json:"limit,omitempty" jsonschema:"max pages to return (default 500)"`
 		Offset int    `json:"offset,omitempty" jsonschema:"skip this many matching pages, for paging"`
 	}
-	type listPagedOut struct {
-		Pages     []okfRef `json:"pages"`
-		Total     int      `json:"total" jsonschema:"how many pages match the filters in the whole wiki"`
-		Truncated bool     `json:"truncated,omitempty"`
+	type listOut struct {
+		Pages     []core.PageMeta `json:"pages"`
+		Total     int             `json:"total" jsonschema:"total pages matching the filters across the whole wiki"`
+		Truncated bool            `json:"truncated" jsonschema:"true when more pages match than were returned; page with offset"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "wiki_list",
-		Description: "List wiki pages alphabetical by slug. Each entry includes OKF metadata (type, description, resource, tags, timestamp) when set. Filter with prefix (slug prefix) or type (OKF type value). Large wikis are paged: when truncated is true, total reports the full match count; narrow with prefix/type or page with offset.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in listIn) (*mcp.CallToolResult, listPagedOut, error) {
-		pages, err := st.ListOKF()
-		if err != nil {
-			return nil, listPagedOut{}, err
-		}
-		limit := in.Limit
-		if limit <= 0 {
-			limit = 500
-		}
-		out := listPagedOut{Pages: []okfRef{}}
-		for _, p := range pages {
-			if in.Prefix != "" && !strings.HasPrefix(p.Slug, in.Prefix) {
-				continue
-			}
-			if in.Type != "" && !strings.EqualFold(p.Type, in.Type) {
-				continue
-			}
-			if out.Total >= in.Offset && len(out.Pages) < limit {
-				out.Pages = append(out.Pages, okfRef{
-					Slug: p.Slug, Title: p.Title, Type: p.Type,
-					Description: p.Description, Resource: p.Resource,
-					Tags: p.Tags, Timestamp: p.Timestamp,
-				})
-			}
-			out.Total++
-		}
-		out.Truncated = in.Offset+len(out.Pages) < out.Total
-		return nil, out, nil
-	})
-
-	type readIn struct {
-		Slug string `json:"slug" jsonschema:"slug of the page, e.g. concepts/mcp"`
-	}
-	type readOut struct {
-		Slug    string `json:"slug"`
-		Title   string `json:"title"`
-		Content string `json:"content" jsonschema:"full markdown including YAML frontmatter"`
-	}
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "wiki_read",
-		Description: "Read a single wiki page by slug, returning its full markdown.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in readIn) (*mcp.CallToolResult, readOut, error) {
-		page, err := st.Read(in.Slug)
-		if err != nil {
-			return nil, readOut{}, err
-		}
-		return nil, readOut{Slug: page.Slug, Title: page.Title, Content: page.Raw}, nil
-	})
-
-	type searchIn struct {
-		Query string `json:"query" jsonschema:"text to search for across page titles and bodies"`
-	}
-	type searchOut struct {
-		Hits      []store.SearchHit `json:"hits"`
-		Truncated bool              `json:"truncated,omitempty"`
-	}
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "wiki_search",
-		Description: "Prefix-AND full-text search across page titles and bodies (each term matches as a prefix; boolean operators are treated as literal words). When truncated is true, more pages match than were returned; narrow the query.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in searchIn) (*mcp.CallToolResult, searchOut, error) {
-		hits, err := searcher.Search(in.Query)
-		if err != nil {
-			return nil, searchOut{}, err
-		}
-		truncated := len(hits) > store.SearchLimit
-		if truncated {
-			hits = hits[:store.SearchLimit]
-		}
-		return nil, searchOut{Hits: orEmpty(hits), Truncated: truncated}, nil
-	})
-
-	type graphIn struct {
-		Limit int `json:"limit,omitempty" jsonschema:"max pages to return, most-connected first; 0 uses a default cap suited to large wikis"`
-	}
-	type graphOut struct {
-		Pages     []graphPageRef    `json:"pages"`
-		Edges     []store.GraphEdge `json:"edges"`
-		Truncated bool              `json:"truncated,omitempty"`
-		Total     int               `json:"total,omitempty"`
-	}
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "wiki_graph",
-		Description: "Return the wiki as a graph: pages as nodes (with degree and OKF type when set) and resolved [[wikilink]] references as directed edges. Large wikis are capped to the most-connected pages; pass limit to widen or narrow, and start from wiki_hubs.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in graphIn) (*mcp.CallToolResult, graphOut, error) {
-		limit := in.Limit
-		if limit <= 0 {
-			limit = 500
-		}
-		g, err := st.GraphViewTop(limit)
-		if err != nil {
-			return nil, graphOut{}, err
-		}
-		out := graphOut{Pages: []graphPageRef{}, Edges: orEmpty(g.Edges), Truncated: g.Truncated, Total: g.Total}
-		for _, n := range g.Nodes {
-			out.Pages = append(out.Pages, graphPageRef{Slug: n.Slug, Title: n.Title, Degree: n.Degree, Type: n.Type})
-		}
-		return nil, out, nil
-	})
-
-	type rawListOut struct {
-		Documents []string `json:"documents"`
-	}
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "wiki_list_raw",
-		Description: "List raw source documents in raw/, available to synthesise into pages.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, rawListOut, error) {
-		names, err := st.ListRaw()
-		if err != nil {
-			return nil, rawListOut{}, err
-		}
-		return nil, rawListOut{Documents: orEmpty(names)}, nil
-	})
-
-	type rawReadIn struct {
-		Name string `json:"name" jsonschema:"file name within the raw/ directory"`
-	}
-	type rawReadOut struct {
-		Name    string `json:"name"`
-		Content string `json:"content"`
-	}
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "wiki_read_raw",
-		Description: "Read a raw source document by name.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in rawReadIn) (*mcp.CallToolResult, rawReadOut, error) {
-		content, err := st.ReadRaw(in.Name)
-		if err != nil {
-			return nil, rawReadOut{}, err
-		}
-		return nil, rawReadOut{Name: in.Name, Content: content}, nil
-	})
-
-	type lintIn struct {
-		Content string `json:"content" jsonschema:"markdown (with frontmatter) to validate without writing"`
-	}
-	type lintOut struct {
-		Issues []lint.Issue `json:"issues"`
-		OK     bool         `json:"ok"`
-	}
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "wiki_lint",
-		Description: "Dry-run the write checks against some markdown without saving it.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in lintIn) (*mcp.CallToolResult, lintOut, error) {
-		resolves, err := st.LinkChecker()
-		if err != nil {
-			return nil, lintOut{}, err
-		}
-		fm, body := store.SplitFrontmatter(in.Content)
-		issues := lint.Check(fm, body, resolves, opts.Rules)
-		return nil, lintOut{Issues: orEmpty(issues), OK: !lint.HasErrors(issues)}, nil
-	})
-
-	type proposalRef struct {
-		ID      string `json:"id"`
-		Slug    string `json:"slug"`
-		Title   string `json:"title"`
-		Author  string `json:"author"`
-		Status  string `json:"status"`
-		Stale   bool   `json:"stale"`
-		Created string `json:"created"`
-	}
-	type listProposalsOut struct {
-		Proposals []proposalRef `json:"proposals"`
-	}
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "wiki_list_proposals",
-		Description: "List proposals in the review queue: pending writes awaiting human approval, plus recently merged or rejected ones.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, listProposalsOut, error) {
-		ps, err := q.List()
-		if err != nil {
-			return nil, listProposalsOut{}, err
-		}
-		out := listProposalsOut{Proposals: []proposalRef{}}
-		for _, p := range ps {
-			out.Proposals = append(out.Proposals, proposalRef{
-				ID: p.ID, Slug: p.Slug, Title: p.Title, Author: p.Author,
-				Status: string(p.Status), Stale: q.Stale(p), Created: p.Created.Format("2006-01-02T15:04:05Z"),
-			})
-		}
-		return nil, out, nil
-	})
-
-	type slugIn struct {
-		Slug string `json:"slug" jsonschema:"slug of the page"`
-	}
-
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "wiki_backlinks",
-		Description: "List the pages that link to a given page.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in slugIn) (*mcp.CallToolResult, listOut, error) {
-		metas, err := st.Backlinks(in.Slug)
+		Description: "List wiki pages (slug-sorted) with OKF metadata. Filter by prefix, type, or tag; page large wikis with offset (see total and truncated).",
+		Annotations: readOnly,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in listIn) (*mcp.CallToolResult, listOut, error) {
+		res, err := c.List(ctx, in.Prefix, in.Type, in.Tag, in.Limit, in.Offset)
 		if err != nil {
 			return nil, listOut{}, err
 		}
-		out := listOut{Pages: []pageRef{}}
-		for _, m := range metas {
-			out.Pages = append(out.Pages, pageRef{Slug: m.Slug, Title: m.Title})
+		return nil, listOut{Pages: res.Items, Total: res.Total, Truncated: res.Truncated}, nil
+	})
+
+	type readIn struct {
+		Slug string `json:"slug" jsonschema:"slug of the page, e.g. tables/customers"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "wiki_read",
+		Description: "Read a page by slug: its markdown body plus inlined outbound and inbound links (each with slug, title, and OKF type). Same data as the wiki://page/{slug} resource.",
+		Annotations: readOnly,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in readIn) (*mcp.CallToolResult, core.Page, error) {
+		page, err := c.Read(ctx, in.Slug)
+		if err != nil {
+			return nil, core.Page{}, err
 		}
-		return nil, out, nil
+		return nil, page, nil
+	})
+
+	type searchIn struct {
+		Query string `json:"query" jsonschema:"keywords to find; every whitespace-separated term must appear in the page (case-insensitive)"`
+		Regex bool   `json:"regex,omitempty" jsonschema:"treat query as a single regular expression (RE2) instead of keywords"`
+		Type  string `json:"type,omitempty" jsonschema:"narrow to this OKF type"`
+		Tag   string `json:"tag,omitempty" jsonschema:"narrow to this tag"`
+		Limit int    `json:"limit,omitempty" jsonschema:"max hits to return (default 100)"`
+	}
+	type searchOut struct {
+		Hits []core.Match `json:"hits"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "wiki_search",
+		Description: "Keyword search over page bodies: every whitespace-separated term must appear (case-insensitive AND), or one RE2 pattern when regex=true. Optionally narrowed by type and tag. Deterministic slug ordering; each hit carries title, type, tags, and a context snippet.",
+		Annotations: readOnly,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in searchIn) (*mcp.CallToolResult, searchOut, error) {
+		hits, err := c.Search(ctx, in.Query, in.Regex, in.Type, in.Tag, in.Limit)
+		if err != nil {
+			return nil, searchOut{}, err
+		}
+		return nil, searchOut{Hits: orEmpty(hits)}, nil
+	})
+
+	type backlinksIn struct {
+		Slug string `json:"slug" jsonschema:"slug of the page to find links to"`
+	}
+	type backlinksOut struct {
+		Backlinks []string `json:"backlinks"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "wiki_backlinks",
+		Description: "List slugs of pages that link to the given page (via [[wikilinks]] or relative .md links).",
+		Annotations: readOnly,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in backlinksIn) (*mcp.CallToolResult, backlinksOut, error) {
+		bl, err := c.Backlinks(ctx, in.Slug)
+		if err != nil {
+			return nil, backlinksOut{}, err
+		}
+		return nil, backlinksOut{Backlinks: orEmpty(bl)}, nil
 	})
 
 	type neighborsIn struct {
-		Slug  string `json:"slug" jsonschema:"slug of the page to start from"`
-		Depth int    `json:"depth,omitempty" jsonschema:"how many hops out to include (default 1)"`
+		Slug  string `json:"slug" jsonschema:"slug of the page whose neighbourhood to pull"`
+		Depth int    `json:"depth,omitempty" jsonschema:"hops out from the page, 1-3 (default 1)"`
 	}
 	type neighborsOut struct {
-		Neighbors []store.Neighbor `json:"neighbors"`
+		Neighbors []core.GraphNode `json:"neighbors"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "wiki_neighbors",
-		Description: "List the pages connected to a page within N hops over the link graph, nearest first, treating links as undirected (a link counts either way). Use this to pull a page's surrounding context in one call instead of guessing related pages. wiki_graph returns the directed edges.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in neighborsIn) (*mcp.CallToolResult, neighborsOut, error) {
-		depth := in.Depth
-		if depth <= 0 {
-			depth = 1
-		}
-		nb, err := st.Neighbors(in.Slug, depth)
+		Description: "Return a page's linked neighbourhood (undirected) within depth hops in one call, each neighbor with title, OKF type, and link degree.",
+		Annotations: readOnly,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in neighborsIn) (*mcp.CallToolResult, neighborsOut, error) {
+		nb, err := c.Neighbors(ctx, in.Slug, in.Depth)
 		if err != nil {
 			return nil, neighborsOut{}, err
 		}
 		return nil, neighborsOut{Neighbors: orEmpty(nb)}, nil
 	})
 
-	type pathIn struct {
-		From string `json:"from" jsonschema:"slug of the page to start from"`
-		To   string `json:"to" jsonschema:"slug of the page to reach"`
+	type tagsIn struct {
+		Tag string `json:"tag,omitempty" jsonschema:"a specific tag to get its count; omit to list all tags"`
 	}
-	type pathOut struct {
-		Path []pageRef `json:"path"`
+	type tagsOut struct {
+		Tags []core.TagCount `json:"tags"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "wiki_path",
-		Description: "Find the shortest chain of linked pages connecting two pages, inclusive of both ends, or empty if they are not connected. Links are followed in either direction (undirected). Use this to answer how one topic relates to another.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in pathIn) (*mcp.CallToolResult, pathOut, error) {
-		metas, err := st.Path(in.From, in.To)
+		Name:        "wiki_tags",
+		Description: "List every tag with its page count, or pass a tag to get just its count. Use for faceted navigation, then filter with wiki_list tag=.",
+		Annotations: readOnly,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in tagsIn) (*mcp.CallToolResult, tagsOut, error) {
+		var tagPtr *string
+		if in.Tag != "" {
+			tagPtr = &in.Tag
+		}
+		tags, err := c.Tags(ctx, tagPtr)
 		if err != nil {
-			return nil, pathOut{}, err
+			return nil, tagsOut{}, err
 		}
-		out := pathOut{Path: []pageRef{}}
-		for _, m := range metas {
-			out.Path = append(out.Path, pageRef{Slug: m.Slug, Title: m.Title})
-		}
-		return nil, out, nil
+		return nil, tagsOut{Tags: orEmpty(tags)}, nil
 	})
 
 	type hubsIn struct {
-		Limit int `json:"limit,omitempty" jsonschema:"maximum number of pages to return (default 10)"`
+		Limit int `json:"limit,omitempty" jsonschema:"how many top pages to return (default 10)"`
 	}
 	type hubsOut struct {
-		Hubs []store.Hub `json:"hubs"`
+		Hubs []core.GraphNode `json:"hubs"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "wiki_hubs",
-		Description: "List the most-connected pages by number of links, the natural entry points into an unfamiliar wiki. Read these first to orient.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in hubsIn) (*mcp.CallToolResult, hubsOut, error) {
-		limit := in.Limit
-		if limit <= 0 {
-			limit = 10
-		}
-		hubs, err := st.Hubs(limit)
+		Description: "List the most-connected pages, highest link degree first. Good entry points for orienting in an unfamiliar wiki.",
+		Annotations: readOnly,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in hubsIn) (*mcp.CallToolResult, hubsOut, error) {
+		hubs, err := c.Hubs(ctx, in.Limit)
 		if err != nil {
 			return nil, hubsOut{}, err
 		}
 		return nil, hubsOut{Hubs: orEmpty(hubs)}, nil
 	})
 
-	type healthOut struct {
-		Orphans []pageRef          `json:"orphans"`
-		Broken  []store.BrokenLink `json:"broken"`
-		Stale   []store.StalePage  `json:"stale"`
-	}
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "wiki_health",
-		Description: "Find pages that need attention: orphans (no incoming links), broken wikilinks, and stale pages (untouched for 90+ days). Use this to decide what to fix.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, healthOut, error) {
-		h, err := st.Health()
-		if err != nil {
-			return nil, healthOut{}, err
-		}
-		out := healthOut{Orphans: []pageRef{}, Broken: orEmpty(h.Broken), Stale: orEmpty(h.Stale)}
-		for _, o := range h.Orphans {
-			out.Orphans = append(out.Orphans, pageRef{Slug: o.Slug, Title: o.Title})
-		}
-		return nil, out, nil
-	})
-
 	type recentIn struct {
-		Limit int `json:"limit,omitempty" jsonschema:"maximum number of changes to return (default 20)"`
+		Limit int `json:"limit,omitempty" jsonschema:"how many pages to return, freshest first (default 20)"`
 	}
 	type recentOut struct {
-		Changes []store.Change `json:"changes"`
+		Pages []core.PageMeta `json:"pages"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "wiki_recent",
-		Description: "List recently changed pages, newest first. Removed pages appear with deleted set to true.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in recentIn) (*mcp.CallToolResult, recentOut, error) {
-		limit := in.Limit
-		if limit <= 0 {
-			limit = 20
-		}
-		changes, err := st.Recent(limit)
+		Description: "List concept pages ordered by their OKF timestamp (knowledge last updated), freshest first. Use to see what has changed most recently or to gauge staleness.",
+		Annotations: readOnly,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in recentIn) (*mcp.CallToolResult, recentOut, error) {
+		pages, err := c.Recent(ctx, in.Limit)
 		if err != nil {
 			return nil, recentOut{}, err
 		}
-		return nil, recentOut{Changes: orEmpty(changes)}, nil
+		return nil, recentOut{Pages: orEmpty(pages)}, nil
 	})
 
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "wiki_graph",
+		Description: "Return the whole page link graph: nodes (slug, title, OKF type, degree) and undirected edges from resolved links.",
+		Annotations: readOnly,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, core.Graph, error) {
+		g, err := c.Graph(ctx)
+		if err != nil {
+			return nil, core.Graph{}, err
+		}
+		return nil, g, nil
+	})
+
+	type historyIn struct {
+		Slug  string `json:"slug" jsonschema:"slug of the page"`
+		Limit int    `json:"limit,omitempty" jsonschema:"max commits (default 20)"`
+	}
 	type historyOut struct {
-		Revisions []store.Revision `json:"revisions"`
+		Versioned bool          `json:"versioned" jsonschema:"false when the wiki is not a git repo, so empty commits means unversioned rather than no changes"`
+		Commits   []core.Commit `json:"commits"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "wiki_history",
-		Description: "List the git revisions of a page, newest first.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in slugIn) (*mcp.CallToolResult, historyOut, error) {
-		revs, err := st.History(in.Slug)
+		Description: "Git commit history for a page, newest first. If versioned is false the wiki is not a git repo, so an empty commits list means history is unavailable, not that the page is unchanged.",
+		Annotations: readOnly,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in historyIn) (*mcp.CallToolResult, historyOut, error) {
+		commits, err := c.History(ctx, in.Slug, in.Limit)
 		if err != nil {
 			return nil, historyOut{}, err
 		}
-		return nil, historyOut{Revisions: orEmpty(revs)}, nil
+		return nil, historyOut{Versioned: versioned(c), Commits: orEmpty(commits)}, nil
 	})
 
-	type tagsIn struct {
-		Tag string `json:"tag,omitempty" jsonschema:"list the pages carrying this tag; omit to list every tag with its page count"`
-	}
-	type tagCount struct {
-		Tag   string `json:"tag"`
-		Count int    `json:"count"`
-	}
-	type tagsOut struct {
-		Tags  []tagCount `json:"tags"`
-		Pages []pageRef  `json:"pages"`
+	// wiki_info lets an agent confirm which knowledge base it is connected to.
+	type infoOut struct {
+		Title       string `json:"title"`
+		Description string `json:"description"`
+		Pages       int    `json:"pages" jsonschema:"number of concept pages (reserved index/log files excluded)"`
+		Versioned   bool   `json:"versioned"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "wiki_tags",
-		Description: "List every tag with how many pages carry it. Pass tag to get that one tag's pages instead.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in tagsIn) (*mcp.CallToolResult, tagsOut, error) {
-		tags, err := st.Tags()
+		Name:        "wiki_info",
+		Description: "Identify the connected wiki: its title, description, concept-page count, and whether it is git-versioned. Call this to confirm you are querying the intended knowledge base.",
+		Annotations: readOnly,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, infoOut, error) {
+		res, err := c.List(ctx, "", "", "", 0, 0)
 		if err != nil {
-			return nil, tagsOut{}, err
+			return nil, infoOut{}, err
 		}
-		out := tagsOut{Tags: []tagCount{}, Pages: []pageRef{}}
-		if in.Tag != "" {
-			for _, m := range tags[in.Tag] {
-				out.Pages = append(out.Pages, pageRef{Slug: m.Slug, Title: m.Title})
-			}
-			return nil, out, nil
-		}
-		names := make([]string, 0, len(tags))
-		for name := range tags {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			out.Tags = append(out.Tags, tagCount{Tag: name, Count: len(tags[name])})
-		}
-		return nil, out, nil
+		return nil, infoOut{Title: title, Description: description, Pages: res.Total, Versioned: versioned(c)}, nil
 	})
+}
 
-	if opts.ReadOnly {
-		return s
+// versioned reports whether the Core is backed by a git repo, when it exposes
+// that capability.
+func versioned(c core.Core) bool {
+	if v, ok := c.(interface{ Versioned() bool }); ok {
+		return v.Versioned()
 	}
+	return false
+}
 
-	type writeIn struct {
-		Slug    string `json:"slug" jsonschema:"slug of the page to create or replace, e.g. concepts/mcp"`
-		Content string `json:"content" jsonschema:"full markdown including YAML frontmatter with a title"`
-		Message string `json:"message,omitempty" jsonschema:"commit message describing the change"`
+// orEmpty makes an empty MCP array serialize as [] rather than null.
+func orEmpty[T any](s []T) []T {
+	if s == nil {
+		return []T{}
 	}
-	type writeOut struct {
-		Status     string       `json:"status" jsonschema:"committed, proposed, rejected, or unchanged"`
-		Slug       string       `json:"slug,omitempty" jsonschema:"the canonical slug the page was filed under, which may differ from the one you passed"`
-		Committed  bool         `json:"committed"`
-		ProposalID string       `json:"proposal_id,omitempty"`
-		Issues     []lint.Issue `json:"issues"`
-	}
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "wiki_write",
-		Description: "Create or replace a wiki page. Lint runs first; errors block it. A trusted caller commits directly to git; otherwise the write is queued as a proposal for a human to approve. The status is committed, proposed, rejected, or unchanged (the page already had this exact content, so nothing was written).",
-	}, func(_ context.Context, req *mcp.CallToolRequest, in writeIn) (*mcp.CallToolResult, writeOut, error) {
-		principal := principalFrom(req, reg)
-		resolves, err := st.LinkChecker()
-		if err != nil {
-			return nil, writeOut{}, err
-		}
-		fm, body := store.SplitFrontmatter(in.Content)
-		issues := orEmpty(lint.Check(fm, body, resolves, opts.Rules))
-		if lint.HasErrors(issues) {
-			return &mcp.CallToolResult{IsError: true}, writeOut{Status: "rejected", Issues: issues}, nil
-		}
-		canon, _ := st.CanonicalSlug(in.Slug) // echo the slug the page is actually filed under
-
-		// Report an identical write honestly: nothing is committed, so do not claim
-		// it was, and skip the proposal path (there is nothing to review).
-		if cur, err := st.Read(in.Slug); err == nil && cur.Raw == in.Content {
-			return nil, writeOut{Status: "unchanged", Slug: canon, Issues: issues}, nil
-		}
-
-		if opts.ForceReview || !principal.Trusted {
-			p, err := q.Create(in.Slug, in.Content, principal.Name, issues)
-			if err != nil {
-				return nil, writeOut{}, err
-			}
-			return nil, writeOut{Status: "proposed", Slug: canon, ProposalID: p.ID, Issues: issues}, nil
-		}
-
-		message := in.Message
-		if message == "" {
-			message = fmt.Sprintf("waqwaq: update %s", in.Slug)
-		}
-		if err := st.Write(in.Slug, in.Content, fmt.Sprintf("%s <agent@waqwaq.local>", principal.Name), message); err != nil {
-			return nil, writeOut{}, err
-		}
-		return nil, writeOut{Status: "committed", Slug: canon, Committed: true, Issues: issues}, nil
-	})
-
-	type deleteIn struct {
-		Slug    string `json:"slug" jsonschema:"slug of the page to remove"`
-		Message string `json:"message,omitempty" jsonschema:"commit message describing why"`
-	}
-	type deleteOut struct {
-		Status     string `json:"status"` // committed, proposed, or rejected
-		Deleted    bool   `json:"deleted,omitempty"`
-		ProposalID string `json:"proposal_id,omitempty"`
-	}
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "wiki_delete",
-		Description: "Remove a wiki page. A trusted caller deletes it directly (committed to git, recoverable from history); otherwise the deletion is queued as a proposal for a human to approve. Check the returned status.",
-	}, func(_ context.Context, req *mcp.CallToolRequest, in deleteIn) (*mcp.CallToolResult, deleteOut, error) {
-		principal := principalFrom(req, reg)
-		if _, err := st.Read(in.Slug); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return &mcp.CallToolResult{IsError: true}, deleteOut{Status: "rejected"}, fmt.Errorf("page %q does not exist", in.Slug)
-			}
-			return nil, deleteOut{}, err
-		}
-		if opts.ForceReview || !principal.Trusted {
-			p, err := q.CreateDelete(in.Slug, principal.Name)
-			if err != nil {
-				return nil, deleteOut{}, err
-			}
-			return nil, deleteOut{Status: "proposed", ProposalID: p.ID}, nil
-		}
-		message := in.Message
-		if message == "" {
-			message = fmt.Sprintf("waqwaq: delete %s", in.Slug)
-		}
-		if err := st.Delete(in.Slug, fmt.Sprintf("%s <agent@waqwaq.local>", principal.Name), message); err != nil {
-			return nil, deleteOut{}, err
-		}
-		return nil, deleteOut{Status: "committed", Deleted: true}, nil
-	})
-
-	type ingestIn struct {
-		Name    string `json:"name" jsonschema:"file name to store under raw/, e.g. interview-transcript.md"`
-		Content string `json:"content" jsonschema:"the raw document text"`
-	}
-	type ingestOut struct {
-		Stored string `json:"stored"`
-	}
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "wiki_ingest",
-		Description: "Store a raw source document under raw/ for later synthesis into pages. Does not create a page.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in ingestIn) (*mcp.CallToolResult, ingestOut, error) {
-		if err := st.AddRaw(in.Name, []byte(in.Content)); err != nil {
-			return nil, ingestOut{}, err
-		}
-		return nil, ingestOut{Stored: "raw/" + in.Name}, nil
-	})
-
-	type deleteRawIn struct {
-		Name string `json:"name" jsonschema:"file name of the raw document to remove"`
-	}
-	type deleteRawOut struct {
-		Deleted string `json:"deleted"`
-	}
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "wiki_delete_raw",
-		Description: "Remove a raw source document from raw/.",
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in deleteRawIn) (*mcp.CallToolResult, deleteRawOut, error) {
-		if err := st.DeleteRaw(in.Name); err != nil {
-			return nil, deleteRawOut{}, err
-		}
-		return nil, deleteRawOut{Deleted: "raw/" + in.Name}, nil
-	})
-
 	return s
 }
 
-func principalFrom(req *mcp.CallToolRequest, reg *auth.Registry) auth.Principal {
-	var header string
-	if req != nil && req.Extra != nil && req.Extra.Header != nil {
-		header = req.Extra.Header.Get("Authorization")
-	}
-	if p, ok := reg.Resolve(header); ok {
-		return p
-	}
-	return auth.Principal{Name: "unknown"}
+// ServeStdio runs an MCP server over stdin/stdout for an agent subprocess.
+func ServeStdio(ctx context.Context, s *mcp.Server) error {
+	return s.Run(ctx, &mcp.StdioTransport{})
 }

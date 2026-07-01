@@ -1,0 +1,4 @@
+{
+  "title": "Bitcoin Blockchain (OKF)",
+  "mcp_description": "the crypto_bitcoin BigQuery public dataset as an OKF bundle: blocks, transactions, inputs, and outputs"
+}

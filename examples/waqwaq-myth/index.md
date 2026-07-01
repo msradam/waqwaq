@@ -1,5 +1,9 @@
 ---
 title: Waq-Waq
+type: Index
+description: "Overview of the Waq-Waq tradition: the marvellous tree of talking fruit and the distant islands that shared its name."
+tags: [waqwaq, mythology, overview]
+timestamp: 2026-06-01T00:00:00Z
 ---
 
 # Waq-Waq

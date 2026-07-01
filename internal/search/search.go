@@ -1,257 +1,194 @@
-//go:build !zos && !nofts
-
+// Package search is a small ripgrep-style scanner over a directory of markdown.
+// Literal queries fast-path through bytes.Contains; pattern queries use stdlib
+// regexp (RE2: linear-time, no catastrophic backtracking). The directory walk is
+// parallelized across a goroutine pool.
+//
+// ponytail: out of scope by design — SIMD/Teddy multi-literal prefiltering and
+// mmap I/O. Wiki-scale corpora (thousands of small files) are dominated by walk
+// and read syscalls, not match throughput; don't add either without a benchmark
+// that motivates it.
 package search
 
 import (
-	"database/sql"
+	"bytes"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
+	"sort"
 	"strings"
 	"sync"
-	"unicode"
-
-	_ "modernc.org/sqlite"
-
-	"github.com/msradam/waqwaq/internal/store"
 )
 
-// Index is the SQLite FTS5 full-text index. It persists to the OS cache directory
-// keyed by the wiki's path, so it is built once and reused across serve and mcp
-// invocations; each refresh updates only the pages whose fingerprint changed.
-// This matters most for the per-session stdio mcp client, which would otherwise
-// rebuild the whole index on every connection.
-type Index struct {
-	st  *store.Store
-	db  *sql.DB
-	mu  sync.Mutex
-	sig string
-	fps map[string]string // slug -> fingerprint of the indexed content
+// Result is one matching file with a context snippet around the first hit.
+type Result struct {
+	Path    string
+	Context string
 }
 
-func New(st *store.Store) (*Index, error) {
-	db, persisted, err := openIndexDB(st)
-	if err != nil {
-		return nil, err
-	}
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	db.SetConnMaxIdleTime(0)
-	db.SetConnMaxLifetime(0)
-	// WAL lets a second process read while one refreshes; busy_timeout makes a
-	// concurrent writer wait rather than error. No-ops on the in-memory fallback.
-	for _, p := range []string{`PRAGMA journal_mode=WAL`, `PRAGMA busy_timeout=5000`, `PRAGMA synchronous=NORMAL`} {
-		_, _ = db.Exec(p)
-	}
-	if _, err := db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS pages USING fts5(slug, title, body, tokenize='porter unicode61')`); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS pagemeta(slug TEXT PRIMARY KEY, fp TEXT, rid INTEGER)`); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	ix := &Index{st: st, db: db, fps: map[string]string{}}
-	if persisted {
-		ix.loadFingerprints() // an existing index already holds these pages
-	}
-	return ix, nil
-}
+// contextRadius is how many bytes of surrounding text to include in a snippet.
+const contextRadius = 60
 
-// openIndexDB opens the persistent index in the wiki's cache directory (a
-// derived cache, not part of the user's repo). It falls back to an in-memory
-// database if the cache directory is unavailable or the on-disk file cannot be
-// opened, so search always works even when persistence does not.
-func openIndexDB(st *store.Store) (db *sql.DB, persisted bool, err error) {
-	if dir, cerr := st.CacheDir(); cerr == nil {
-		// search-v2 in the name lets a schema change use a fresh file; v1 (which
-		// had no rowid column in pagemeta) is removed rather than left to rot.
-		for _, suffix := range []string{"", "-wal", "-shm"} {
-			_ = os.Remove(filepath.Join(dir, "search-v1.db"+suffix))
-		}
-		if d, derr := sql.Open("sqlite", filepath.Join(dir, "search-v2.db")); derr == nil {
-			if d.Ping() == nil {
-				return d, true, nil
-			}
-			_ = d.Close()
-		}
+// Search scans dir for query. When isRegex is true the query is compiled as a
+// stdlib regexp. Otherwise the query is split into whitespace-separated terms and
+// a file matches when it contains ALL terms, case-insensitively (keyword AND, not
+// a whole-string substring) — so a natural multi-word query like "output value
+// per day" finds pages carrying those words, which a single-substring match would
+// miss. Results are capped at limit (0 means a default of 100) and returned
+// sorted by path for determinism.
+func Search(dir, query string, isRegex bool, limit int) ([]Result, error) {
+	if limit <= 0 {
+		limit = 100
 	}
-	d, derr := sql.Open("sqlite", ":memory:")
-	return d, false, derr
-}
-
-func (ix *Index) loadFingerprints() {
-	rows, err := ix.db.Query(`SELECT slug, fp FROM pagemeta`)
-	if err != nil {
-		return
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var slug, fp string
-		if rows.Scan(&slug, &fp) == nil {
-			ix.fps[slug] = fp
-		}
-	}
-}
-
-func (ix *Index) Close() error { return ix.db.Close() }
-
-// Warm builds the index ahead of the first query so the first search does not
-// pay the full-corpus indexing cost. Serve runs it in the background at startup.
-func (ix *Index) Warm() {
-	ix.mu.Lock()
-	defer ix.mu.Unlock()
-	_ = ix.refresh()
-}
-
-func (ix *Index) Search(query string) ([]store.SearchHit, error) {
-	match := buildMatch(query)
-	if match == "" {
+	if strings.TrimSpace(query) == "" {
 		return nil, nil
 	}
-	ix.mu.Lock()
-	defer ix.mu.Unlock()
-	if err := ix.refresh(); err != nil {
-		return nil, err
-	}
-	rows, err := ix.db.Query(
-		`SELECT slug, title, snippet(pages, 2, '', '', '…', 12) FROM pages WHERE pages MATCH ? ORDER BY rank LIMIT ?`,
-		match, store.SearchLimit+1) // one past, so the caller can detect truncation
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var hits []store.SearchHit
-	for rows.Next() {
-		var h store.SearchHit
-		if err := rows.Scan(&h.Slug, &h.Title, &h.Snippet); err != nil {
+
+	var re *regexp.Regexp
+	var terms [][]byte // lowercased keyword terms for the literal AND path
+	if isRegex {
+		var err error
+		re, err = regexp.Compile(query)
+		if err != nil {
 			return nil, err
 		}
-		hits = append(hits, h)
+	} else {
+		for _, t := range strings.Fields(query) {
+			terms = append(terms, []byte(strings.ToLower(t)))
+		}
 	}
-	return hits, rows.Err()
+
+	paths, err := collectFiles(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	results := scan(paths, func(data []byte) (int, bool) {
+		if isRegex {
+			loc := re.FindIndex(data)
+			if loc == nil {
+				return 0, false
+			}
+			return loc[0], true
+		}
+		// ponytail: lowercase a copy per file for case-insensitive AND. Fine at
+		// wiki scale; if a corpus ever dwarfs this, fold case during the walk.
+		lower := bytes.ToLower(data)
+		first := -1
+		for _, term := range terms {
+			idx := bytes.Index(lower, term)
+			if idx < 0 {
+				return 0, false // a required term is absent
+			}
+			if first < 0 || idx < first {
+				first = idx
+			}
+		}
+		return first, true
+	})
+
+	sort.Slice(results, func(i, j int) bool { return results[i].Path < results[j].Path })
+	if len(results) > limit {
+		results = results[:limit]
+	}
+	return results, nil
 }
 
-func (ix *Index) refresh() error {
-	sig, err := ix.st.Signature()
-	if err != nil {
-		return err
-	}
-	if sig == ix.sig {
+// collectFiles walks dir for .md files, skipping dotfiles and dot-directories
+// (which covers .git, .waqwaq, etc.) so we never need an external ignore lib.
+func collectFiles(dir string) ([]string, error) {
+	var paths []string
+	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		name := d.Name()
+		if d.IsDir() {
+			if p != dir && strings.HasPrefix(name, ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasPrefix(name, ".") || !strings.HasSuffix(name, ".md") {
+			return nil
+		}
+		paths = append(paths, p)
 		return nil
-	}
-	fps, err := ix.st.Fingerprints()
-	if err != nil {
-		return err
-	}
-	tx, err := ix.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	// Deleting an FTS5 row by column value full-scans the virtual table, which
-	// made refreshes O(N²) in the page count (a cold 20k-page build took
-	// minutes). Deletes go by rowid instead, tracked in pagemeta and read back
-	// inside the transaction so a concurrent indexer's rows are still seen.
-	del, err := tx.Prepare(`DELETE FROM pages WHERE rowid = ?`)
-	if err != nil {
-		return err
-	}
-	defer del.Close()
-	ins, err := tx.Prepare(`INSERT INTO pages(slug, title, body) VALUES(?, ?, ?)`)
-	if err != nil {
-		return err
-	}
-	defer ins.Close()
-	setMeta, err := tx.Prepare(`INSERT INTO pagemeta(slug, fp, rid) VALUES(?, ?, ?) ON CONFLICT(slug) DO UPDATE SET fp = excluded.fp, rid = excluded.rid`)
-	if err != nil {
-		return err
-	}
-	defer setMeta.Close()
-	delMeta, err := tx.Prepare(`DELETE FROM pagemeta WHERE slug = ?`)
-	if err != nil {
-		return err
-	}
-	defer delMeta.Close()
-	indexed, err := indexedRows(tx)
-	if err != nil {
-		return err
-	}
-	for slug, fp := range fps {
-		rid, ok := indexed[slug]
-		if ok && ix.fps[slug] == fp {
-			continue
-		}
-		page, err := ix.st.Read(slug)
-		if err != nil {
-			continue
-		}
-		if ok {
-			if _, err := del.Exec(rid); err != nil {
-				return err
-			}
-		}
-		res, err := ins.Exec(slug, page.Title, page.Body)
-		if err != nil {
-			return err
-		}
-		newRid, err := res.LastInsertId()
-		if err != nil {
-			return err
-		}
-		if _, err := setMeta.Exec(slug, fp, newRid); err != nil {
-			return err
-		}
-	}
-	for slug, rid := range indexed {
-		if _, ok := fps[slug]; !ok {
-			if _, err := del.Exec(rid); err != nil {
-				return err
-			}
-			if _, err := delMeta.Exec(slug); err != nil {
-				return err
-			}
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	ix.sig = sig
-	ix.fps = fps
-	return nil
+	})
+	return paths, err
 }
 
-// indexedRows maps each indexed slug to the rowid of its pages row.
-func indexedRows(tx *sql.Tx) (map[string]int64, error) {
-	rows, err := tx.Query(`SELECT slug, rid FROM pagemeta`)
-	if err != nil {
-		return nil, err
+// scan reads each path concurrently and, for matches, builds a context snippet.
+// match reports the byte offset of the first hit and whether the file matched.
+func scan(paths []string, match func([]byte) (int, bool)) []Result {
+	workers := runtime.NumCPU()
+	if workers > len(paths) {
+		workers = len(paths)
 	}
-	defer rows.Close()
-	indexed := make(map[string]int64)
-	for rows.Next() {
-		var slug string
-		var rid sql.NullInt64
-		if err := rows.Scan(&slug, &rid); err != nil {
-			return nil, err
-		}
-		if rid.Valid {
-			indexed[slug] = rid.Int64
-		}
+	if workers < 1 {
+		workers = 1
 	}
-	return indexed, rows.Err()
+
+	jobs := make(chan string)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var results []Result
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for p := range jobs {
+				data, err := os.ReadFile(p)
+				if err != nil {
+					continue
+				}
+				// Skip binary files the way ripgrep/git do: a NUL byte in the
+				// first read window means "not text".
+				if window := data; len(window) > 8192 {
+					window = window[:8192]
+					if bytes.IndexByte(window, 0) >= 0 {
+						continue
+					}
+				} else if bytes.IndexByte(window, 0) >= 0 {
+					continue
+				}
+				off, ok := match(data)
+				if !ok {
+					continue
+				}
+				mu.Lock()
+				results = append(results, Result{Path: p, Context: snippet(data, off)})
+				mu.Unlock()
+			}
+		}()
+	}
+	for _, p := range paths {
+		jobs <- p
+	}
+	close(jobs)
+	wg.Wait()
+	return results
 }
 
-// buildMatch turns free text into a safe FTS5 prefix-AND query. It splits on any
-// non-alphanumeric run, so a qualified identifier like `sync.Pool` or `wiki_write`
-// becomes its component prefix terms (`sync* pool*`), matching the way unicode61
-// tokenizes the indexed body. Keeping only letters and digits also means
-// arbitrary input cannot inject FTS operators.
-func buildMatch(query string) string {
-	var terms []string
-	for _, field := range strings.FieldsFunc(query, func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	}) {
-		terms = append(terms, strings.ToLower(field)+"*")
+// snippet returns a single-line context window around off, collapsed to one
+// line. When the window is cut mid-word at either edge, it snaps to the nearest
+// space so the snippet does not start or end inside a word.
+func snippet(data []byte, off int) string {
+	start := off - contextRadius
+	if start < 0 {
+		start = 0
+	} else if i := bytes.IndexByte(data[start:off], ' '); i >= 0 {
+		start += i + 1 // drop the leading partial word
 	}
-	return strings.Join(terms, " ")
+	end := off + contextRadius
+	if end > len(data) {
+		end = len(data)
+	} else if i := bytes.LastIndexByte(data[off:end], ' '); i >= 0 {
+		end = off + i // drop the trailing partial word
+	}
+	s := string(data[start:end])
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	return strings.TrimSpace(s)
 }

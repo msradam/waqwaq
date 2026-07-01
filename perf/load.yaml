@@ -1,0 +1,38 @@
+# Concurrent load test for MCP query latency at scale.
+#
+#   ocarina load perf/load.yaml --vus 8 --duration 10s --threshold p95<500ms
+#
+# ocarina reports p50/p95/p99. Edit `dir` below to point at a large wiki (a few
+# thousand pages) before running; ocarina does not expand {{env.*}} inside the
+# server command args, so use a literal path here.
+keys:
+  dir: examples/okf-demo
+
+server:
+  command: ./waqwaq
+  args: [mcp, "{{dir}}"]
+
+rondo:
+  - name: list_by_type
+    tool: wiki_list
+    args: { type: "Metric" }
+
+  - name: search_literal
+    tool: wiki_search
+    args: { query: "quokka-4242" }
+
+  - name: search_regex
+    tool: wiki_search
+    args: { query: 'quokka-4\d{3}', regex: true }
+
+  - name: neighbors
+    tool: wiki_neighbors
+    args: { slug: page-2500, depth: 1 }
+
+  - name: hubs
+    tool: wiki_hubs
+    args: { limit: 10 }
+
+  - name: read_inline_edges
+    tool: wiki_read
+    args: { slug: page-1234 }

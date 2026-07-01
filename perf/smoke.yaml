@@ -1,0 +1,94 @@
+# Deterministic MCP smoke test for a read-only waqwaq OKF wiki.
+# Drives the live server over stdio, no LLM in the loop. Exits non-zero on any
+# failed expect, so this doubles as a CI check.
+#
+#   ocarina play perf/smoke.yaml
+#
+# Mirrors the agent orient -> filter -> navigate flow the research documented.
+keys:
+  dir: examples/okf-demo
+
+server:
+  command: ./waqwaq
+  args: [mcp, "{{dir}}"]
+
+rondo:
+  - name: wiki_info confirms which wiki is connected
+    tool: wiki_info
+    args: {}
+    expect:
+      contains: Acme Data Catalog
+
+  - name: orient at the index page
+    tool: wiki_read
+    args: { slug: index }
+    expect:
+      contains: Acme Data Catalog
+
+  - name: hubs are the most-connected entry points
+    tool: wiki_hubs
+    args: { limit: 5 }
+    expect:
+      contains: degree
+
+  - name: list all BigQuery Table pages by OKF type
+    tool: wiki_list
+    args: { type: "BigQuery Table" }
+    expect:
+      contains: customers
+
+  - name: exactly two tables in the demo
+    tool: wiki_list
+    args: { type: "BigQuery Table" }
+    expect:
+      matches: '"total":\s*2'
+
+  - name: read a page and get inlined outbound edges
+    tool: wiki_read
+    args: { slug: tables/customers }
+    expect:
+      contains: outbound
+
+  - name: backlinks resolve across the bundle
+    tool: wiki_backlinks
+    args: { slug: tables/customers }
+    expect:
+      contains: orders
+
+  - name: neighbours in one call
+    tool: wiki_neighbors
+    args: { slug: tables/customers, depth: 1 }
+    expect:
+      contains: datasets/sales
+
+  - name: tags carry counts for faceted navigation
+    tool: wiki_tags
+    expect:
+      contains: sales
+
+  - name: keyword search — terms may be scattered and out of order
+    tool: wiki_search
+    args: { query: "email deduped" }
+    expect:
+      contains: tables/customers
+
+  - name: type-narrowed search returns only the metric, not the tables
+    tool: wiki_search
+    args: { query: "customer", type: "Metric" }
+    expect:
+      matches: 'metrics/weekly-active-users(?s).*"type":\s*"Metric"'
+
+  - name: the whole link graph
+    tool: wiki_graph
+    expect:
+      contains: edges
+
+  - name: resources enumerate every page
+    list_resources: true
+    expect:
+      contains: "wiki://page/tables/customers"
+
+  - name: read a page as an MCP resource
+    resource: "wiki://page/tables/orders"
+    expect:
+      contains: customer_id

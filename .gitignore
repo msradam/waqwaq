@@ -6,3 +6,11 @@
 examples/*/.git/
 .waqwaq/tokens.json
 .waqwaq/proposals/
+
+# upstream OKF bundles fetched for testing (see hack/fetch-upstream-bundles.sh)
+examples/upstream/
+
+# build artifacts / local junk
+/genokf
+.DS_Store
+*.dmg

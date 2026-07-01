@@ -1,43 +1,30 @@
+// Command waqwaq serves a read-only OKF markdown wiki over MCP, a web view, and
+// a terminal view — all backed by one stateless core over the same files.
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"html/template"
 	"io"
-	"io/fs"
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/charmbracelet/glamour"
-	"golang.org/x/crypto/bcrypt"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/msradam/waqwaq/internal/auth"
+	"github.com/msradam/waqwaq/core"
 	"github.com/msradam/waqwaq/internal/config"
-	"github.com/msradam/waqwaq/internal/ingest"
-	"github.com/msradam/waqwaq/internal/kb"
-	"github.com/msradam/waqwaq/internal/kbclient"
-	"github.com/msradam/waqwaq/internal/lint"
 	"github.com/msradam/waqwaq/internal/mcpserver"
-	"github.com/msradam/waqwaq/internal/render"
-	"github.com/msradam/waqwaq/internal/review"
-	"github.com/msradam/waqwaq/internal/search"
 	"github.com/msradam/waqwaq/internal/server"
-	"github.com/msradam/waqwaq/internal/store"
 	"github.com/msradam/waqwaq/internal/tui"
 	versionpkg "github.com/msradam/waqwaq/internal/version"
 )
@@ -53,30 +40,24 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		cmdServe(os.Args[2:])
-	case "init":
-		cmdInit(os.Args[2:])
-	case "ingest":
-		cmdIngest(os.Args[2:])
-	case "export":
-		cmdExport(os.Args[2:])
-	case "scan":
-		cmdScan(os.Args[2:])
-	case "doctor":
-		cmdDoctor(os.Args[2:])
-	case "check":
-		cmdCheck(os.Args[2:])
 	case "mcp":
 		cmdMCP(os.Args[2:])
+	case "tui":
+		cmdTUI(os.Args[2:])
+	case "doctor":
+		cmdDoctor(os.Args[2:])
+	case "validate", "check":
+		cmdValidate(os.Args[2:])
 	case "toc":
 		cmdTOC(os.Args[2:])
+	case "recent":
+		cmdRecent(os.Args[2:])
 	case "grep":
 		cmdGrep(os.Args[2:])
 	case "cat":
 		cmdCat(os.Args[2:])
-	case "tui":
-		cmdTUI(os.Args[2:])
-	case "passwd":
-		cmdPasswd(os.Args[2:])
+	case "init":
+		cmdInit(os.Args[2:])
 	case "version", "-v", "--version":
 		fmt.Println("waqwaq", version)
 	default:
@@ -86,135 +67,119 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `waqwaq is a git-backed markdown wiki that humans browse and AI agents read and write.
+	fmt.Fprint(os.Stderr, `waqwaq serves a read-only OKF markdown wiki over MCP, web, and a terminal view.
 
 usage:
-  waqwaq init   <dir>                 scaffold a new wiki (wiki/ + raw/ + CLAUDE.md)
-  waqwaq serve  [dir] [--addr] [--read-only] [--review] [--tokens FILE]
-                                      serve web UI + MCP over one port
-  waqwaq ingest <dir> <file>...       add raw documents to the wiki's raw/ area
-  waqwaq export <dir> <outdir>        render the wiki to a static HTML site
-  waqwaq scan   <repo> <outdir>       generate a wiki from a Go module's import graph
-  waqwaq doctor [dir]                 check a wiki's setup, MCP access, and health
-  waqwaq check  [dir] [--json] [--strict]   lint pages and links, for CI (non-zero on errors)
-  waqwaq mcp    [dir]                 serve MCP over stdio (for an agent subprocess)
-  waqwaq toc    [dir]                 list pages as slug<tab>title (greppable)
-  waqwaq grep   <query> [dir]         full-text search; --tag, --links-to scope it
-  waqwaq cat    <slug> [dir]          print a page; --render for terminal markdown
-  waqwaq tui    [dir]                 browse the wiki in a terminal reader
-  waqwaq passwd [password]            print a bcrypt hash for a web.users entry
+  waqwaq serve  [dir] [--addr]   serve the web view + MCP endpoint on one port
+  waqwaq mcp    [dir]            serve MCP over stdio (for an agent subprocess)
+  waqwaq tui    [dir]            browse the wiki in a terminal reader
+  waqwaq doctor [dir]            check the wiki's setup and MCP posture
+  waqwaq validate [dir] [--json] [--strict]   check OKF compliance and links, for CI
+  waqwaq toc    [dir]            list pages as slug<tab>title (greppable)
+  waqwaq recent [dir] [--limit]  list pages by OKF timestamp, freshest first
+  waqwaq grep   <query> [dir]    full-text search; --regex for a pattern
+  waqwaq cat    <slug> [dir]     print a page; --render for terminal markdown
+  waqwaq init   <dir>            scaffold a small OKF wiki
   waqwaq version
 
-The query verbs (toc, grep, cat) run against a local folder, or add
---remote URL (or set WAQWAQ_REMOTE) to query a running waqwaq server's /api.
-
 Pages are served from <dir>/wiki if present, otherwise from <dir> itself, so a
-bare markdown folder or an Obsidian vault works without restructuring.
-
+bare markdown folder or an OKF bundle works without restructuring. This baseline
+is read-only across every surface: there are no write or mutation commands.
 `)
+}
+
+// buildCore loads config and builds a Core for a directory. OKF enforcement is
+// on unless the wiki opts out with "lenient": true.
+func buildCore(dir string) (core.Core, config.Config, error) {
+	if dir == "" {
+		dir = "."
+	}
+	cfg, err := config.Load(dir)
+	if err != nil {
+		return nil, cfg, err
+	}
+	c, err := core.New(dir, !cfg.Lenient)
+	return c, cfg, err
+}
+
+// enforceOKF refuses to start a server on a bundle that is not OKF compliant,
+// unless the wiki is lenient. This is the opinionated stake on the format: a
+// waqwaq server serves OKF, or it does not serve. Broken links are reported but
+// tolerated (SPEC §9 forbids rejecting a bundle for them).
+func enforceOKF(c core.Core, cfg config.Config, lenientFlag bool) {
+	if cfg.Lenient || lenientFlag {
+		return
+	}
+	rep, err := core.Validate(context.Background(), c, false)
+	if err != nil {
+		log.Fatalf("okf: %v", err)
+	}
+	if !rep.OK() {
+		fmt.Fprintf(os.Stderr, "refusing to serve: %d of %d pages are not OKF compliant.\n", len(rep.Compliance), rep.Pages)
+		for _, v := range rep.Compliance {
+			fmt.Fprintln(os.Stderr, "  "+v)
+		}
+		fmt.Fprintln(os.Stderr, "\nEvery concept page needs a non-empty `type` (OKF SPEC §4.1).")
+		fmt.Fprintln(os.Stderr, "Run `waqwaq validate` for the full report, or set \"lenient\": true / pass --lenient to serve non-OKF markdown.")
+		os.Exit(1)
+	}
+	if len(rep.BrokenLinks) > 0 {
+		log.Printf("  note: %d broken link(s); serving anyway (run `waqwaq validate` to list them)", len(rep.BrokenLinks))
+	}
+}
+
+// instructionsFor returns the CLAUDE.md schema if the Core exposes one.
+func instructionsFor(c core.Core) string {
+	if ins, ok := c.(interface{ Instructions() string }); ok {
+		return ins.Instructions()
+	}
+	return ""
+}
+
+func newMCP(c core.Core, cfg config.Config) *mcp.Server {
+	return mcpserver.New(c, mcpserver.Options{
+		Title:        cfg.Title,
+		Description:  cfg.Description,
+		Instructions: instructionsFor(c),
+	})
 }
 
 func cmdServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	addr := fs.String("addr", "127.0.0.1:8000", "address to listen on")
-	readOnly := fs.Bool("read-only", envBool("WAQWAQ_READ_ONLY"), "disable writes (AI and human)")
-	forceReview := fs.Bool("review", envBool("WAQWAQ_REVIEW"), "queue every write for human review")
-	tokensPath := fs.String("tokens", "", "path to a JSON tokens file (default <dir>/.waqwaq/tokens.json)")
+	lenient := fs.Bool("lenient", false, "serve even if the wiki is not OKF compliant")
 	rest := parseArgs(fs, args)
-
-	dirs := rest
-	if len(dirs) == 0 {
-		dirs = []string{"."}
-	}
-	setFlags := map[string]bool{}
-	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
-
-	var handler http.Handler
-	if len(dirs) == 1 {
-		tp := *tokensPath
-		if tp == "" {
-			tp = os.Getenv("WAQWAQ_TOKENS")
-		}
-		srv, cleanup, cfg, reg, err := buildWiki(dirs[0], "", *readOnly, *forceReview, tp, nil)
-		if err != nil {
-			log.Fatalf("serve: %v", err)
-		}
-		defer cleanup()
-		if !setFlags["addr"] && cfg.Addr != "" {
-			*addr = cfg.Addr
-		}
-		handler = srv.Handler()
-
-		mode := "read-write"
-		if *readOnly {
-			mode = "read-only"
-		}
-		authMode := "open"
-		if reg.Enabled() {
-			authMode = "token"
-		}
-		policy := "direct commit"
-		switch {
-		case *forceReview || cfg.Review:
-			policy = "all writes to review queue"
-		case reg.Enabled():
-			policy = "trusted commit, others to review queue"
-		}
-		log.Printf("waqwaq %s  ·  %s  ·  %s", version, dirs[0], mode)
-		log.Printf("  web UI : http://%s/", *addr)
-		log.Printf("  MCP    : http://%s/mcp   (auth: %s, writes: %s)", *addr, authMode, policy)
-		if cfg.Web.ProxyHeader != "" {
-			log.Printf("  web auth: identity from proxy header %q", cfg.Web.ProxyHeader)
-		} else if len(cfg.Web.Users) > 0 {
-			log.Printf("  web auth: built-in login (%d user(s))", len(cfg.Web.Users))
-		}
-		webAuth := cfg.Web.ProxyHeader != "" || len(cfg.Web.Users) > 0
-		if webAuth && !reg.Enabled() && !*readOnly {
-			log.Printf("  warning: web UI requires login but the MCP endpoint is open; add %s/.waqwaq/tokens.json to require a bearer token", dirs[0])
-		}
-	} else {
-		wikis := make([]server.WikiRef, len(dirs))
-		for i, d := range dirs {
-			name := filepath.Base(d)
-			wikis[i] = server.WikiRef{Name: name, Base: "/w/" + name}
-		}
-		mux := http.NewServeMux()
-		for i, d := range dirs {
-			srv, cleanup, _, _, err := buildWiki(d, wikis[i].Base, *readOnly, *forceReview, "", wikis)
-			if err != nil {
-				log.Fatalf("serve %s: %v", d, err)
-			}
-			defer cleanup()
-			mux.Handle(wikis[i].Base+"/", http.StripPrefix(wikis[i].Base, srv.Handler()))
-		}
-		if sfs, err := server.StaticFS(); err == nil {
-			mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(sfs))))
-		}
-		mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
-		landing := template.Must(template.New("landing").Parse(farmLandingHTML))
-		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/" {
-				http.NotFound(w, r)
-				return
-			}
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_ = landing.Execute(w, wikis)
-		})
-		handler = mux
-
-		log.Printf("waqwaq %s  ·  farm of %d wikis", version, len(dirs))
-		log.Printf("  web UI : http://%s/", *addr)
-		for _, ww := range wikis {
-			log.Printf("  · %-16s http://%s%s/   (MCP at %s/mcp)", ww.Name, *addr, ww.Base, ww.Base)
-		}
+	dir := "."
+	if len(rest) > 0 {
+		dir = rest[0]
 	}
 
-	httpSrv := &http.Server{Addr: *addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	c, cfg, err := buildCore(dir)
+	if err != nil {
+		log.Fatalf("serve: %v", err)
+	}
+	enforceOKF(c, cfg, *lenient)
+	if cfg.Addr != "" && !flagSet(fs, "addr") {
+		*addr = cfg.Addr
+	}
+	// Warm the cache off the request path so the first client on a large wiki
+	// doesn't pay the initial parse.
+	go func() { _, _ = c.List(context.Background(), "", "", "", 1, 0) }()
+
+	mcpHandler := mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return newMCP(c, cfg) }, nil)
+	srv := server.New(c, mcpHandler, server.Site{Title: cfg.Title})
+
+	httpSrv := &http.Server{Addr: *addr, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
-		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("listen: %v", err)
 		}
 	}()
+
+	log.Printf("waqwaq %s  ·  %s  ·  read-only", version, dir)
+	log.Printf("  web view : http://%s/", *addr)
+	log.Printf("  MCP      : http://%s/mcp", *addr)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -224,362 +189,40 @@ func cmdServe(args []string) {
 	_ = httpSrv.Shutdown(ctx)
 }
 
-// siteFor maps config appearance settings to the server's Site, resolving a
-// named lokta pigment accent to its color and on-accent text.
-func siteFor(cfg config.Config) server.Site {
-	color, textOn := config.ResolveAccent(cfg.Accent)
-	return server.Site{Title: cfg.Title, Accent: color, AccentText: textOn, Theme: cfg.Theme}
-}
-
-// buildWiki assembles one wiki's full stack for a data directory. base is "" for
-// a single wiki at the root, or "/w/<name>" in farm mode. The returned cleanup
-// closes the search index.
-func buildWiki(dir, base string, readOnly, forceReview bool, tokensPath string, wikis []server.WikiRef) (*server.Server, func(), config.Config, *auth.Registry, error) {
-	cleanup := func() {}
-	st, err := store.New(dir)
-	if err != nil {
-		return nil, cleanup, config.Config{}, nil, err
-	}
-	go st.Warm()
-	// Re-stat the tree in the background so the adaptive signature memo is
-	// always fresh and no request pays the walk inline (~300ms at 100k pages).
-	go func() {
-		for {
-			time.Sleep(2 * time.Second)
-			_, _ = st.Signature()
-		}
-	}()
-	tp := tokensPath
-	if tp == "" {
-		tp = filepath.Join(st.Root(), ".waqwaq", "tokens.json")
-	}
-	reg, err := auth.Load(tp)
-	if err != nil {
-		return nil, cleanup, config.Config{}, nil, err
-	}
-	cfg, err := config.Load(filepath.Join(st.Root(), ".waqwaq", "config.json"))
-	if err != nil {
-		return nil, cleanup, config.Config{}, nil, err
-	}
-	q, err := review.New(st, cfg.Webhook)
-	if err != nil {
-		return nil, cleanup, config.Config{}, nil, err
-	}
-	var searcher search.Searcher = st
-	if idx, err := search.New(st); err == nil {
-		searcher = idx
-		cleanup = func() { _ = idx.Close() }
-		go idx.Warm()
-	}
-	queueAll := forceReview || cfg.Review
-	mcpSrv := mcpserver.New(st, q, reg, mcpserver.Options{ReadOnly: readOnly, ForceReview: queueAll, Rules: cfg.Lint, Search: searcher, Title: cfg.Title, Description: cfg.MCPDescription})
-	users := make([]server.WebUser, 0, len(cfg.Web.Users))
-	for _, u := range cfg.Web.Users {
-		users = append(users, server.WebUser{Name: u.Name, Hash: u.Password, Role: u.Role})
-	}
-	srv, err := server.New(server.Options{
-		Store: st, Renderer: render.New(base), MCP: mcpSrv, Auth: reg, Queue: q, Search: searcher, Rules: cfg.Lint,
-		Web:      server.WebPolicy{ProxyHeader: cfg.Web.ProxyHeader, DefaultRole: cfg.Web.DefaultRole, Admins: cfg.Web.Admins, Editors: cfg.Web.Editors, Users: users},
-		ReadOnly: readOnly,
-		Site:     siteFor(cfg),
-		Base:     base,
-		Wikis:    wikis,
-	})
-	if err != nil {
-		cleanup()
-		return nil, func() {}, config.Config{}, nil, err
-	}
-	return srv, cleanup, cfg, reg, nil
-}
-
-const farmLandingHTML = `<!doctype html>
-<html lang="en" data-theme="auto">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Waqwaq</title>
-<meta name="color-scheme" content="light dark">
-<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-<link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-<main class="content" style="max-width:600px;margin:60px auto">
-  <h1>🌳 Waqwaq</h1>
-  <p class="muted">Wikis on this server:</p>
-  <ul class="results">
-    {{range .}}<li><a href="{{.Base}}/">{{.Name}}</a></li>{{end}}
-  </ul>
-</main>
-</body>
-</html>`
-
-func cmdInit(args []string) {
-	fs := flag.NewFlagSet("init", flag.ExitOnError)
-	rest := parseArgs(fs, args)
-	if len(rest) == 0 {
-		log.Fatal("usage: waqwaq init <dir>\nrefusing to scaffold into the current directory; pass an explicit path")
-	}
-	dir := rest[0]
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		log.Fatalf("init: %v", err)
-	}
-	for _, sub := range []string{"wiki", "raw"} {
-		if err := os.MkdirAll(filepath.Join(abs, sub), 0o755); err != nil {
-			log.Fatalf("init: %v", err)
-		}
-	}
-	schemaPath := filepath.Join(abs, "CLAUDE.md")
-	if _, err := os.Stat(schemaPath); os.IsNotExist(err) {
-		if err := os.WriteFile(schemaPath, []byte(sampleSchema), 0o644); err != nil {
-			log.Fatalf("init: %v", err)
-		}
-	}
-	st, err := store.New(abs) // detects the wiki/ subdir created above
-	if err != nil {
-		log.Fatalf("init: %v", err)
-	}
-	samples := []struct{ slug, content string }{
-		{"index", sampleIndex},
-		{"concepts/mcp", sampleMCP},
-	}
-	for _, s := range samples {
-		if _, err := st.Read(s.slug); err == nil {
-			continue
-		}
-		if err := st.Write(s.slug, s.content, "waqwaq <init@waqwaq.local>", "waqwaq: scaffold "+s.slug); err != nil {
-			log.Fatalf("write %s: %v", s.slug, err)
-		}
-	}
-	fmt.Printf("Initialised Waqwaq wiki in %s\n", abs)
-	fmt.Print("  wiki/      markdown pages\n  raw/       raw documents to synthesise from\n  CLAUDE.md  wiki schema\n")
-	fmt.Printf("Next: waqwaq serve %s\n", dir)
-}
-
-func cmdIngest(args []string) {
-	fs := flag.NewFlagSet("ingest", flag.ExitOnError)
-	rest := parseArgs(fs, args)
-	if len(rest) < 2 {
-		log.Fatal("usage: waqwaq ingest <dir> <file>...")
-	}
-	st, err := store.New(rest[0])
-	if err != nil {
-		log.Fatalf("ingest: %v", err)
-	}
-	for _, f := range rest[1:] {
-		data, err := os.ReadFile(f)
-		if err != nil {
-			log.Fatalf("read %s: %v", f, err)
-		}
-		name := filepath.Base(f)
-		if err := st.AddRaw(name, data); err != nil {
-			log.Fatalf("add raw: %v", err)
-		}
-		fmt.Printf("ingested %s -> raw/%s\n", f, name)
-	}
-	fmt.Println("Agents can read these via wiki_list_raw / wiki_read_raw,")
-	fmt.Println("then synthesise pages with wiki_write (lint runs before each write lands).")
-}
-
-var wikiLinkHTML = regexp.MustCompile(`(href|src)="/wiki/([^"#]+)(#[^"]*)?"`)
-
-func cmdExport(args []string) {
-	fset := flag.NewFlagSet("export", flag.ExitOnError)
-	rest := parseArgs(fset, args)
-	if len(rest) < 2 {
-		log.Fatal("usage: waqwaq export <dir> <outdir>")
-	}
-	st, err := store.New(rest[0])
-	if err != nil {
-		log.Fatalf("export: %v", err)
-	}
-	out := rest[1]
-	if err := os.MkdirAll(out, 0o755); err != nil {
-		log.Fatalf("export: %v", err)
-	}
-	metas, err := st.List()
-	if err != nil {
-		log.Fatalf("export: %v", err)
-	}
-	rnd := render.New("")
-	tmpl := template.Must(template.New("static").Parse(staticPageHTML))
-	site := "Waqwaq"
-	if cfg, err := config.Load(filepath.Join(st.Root(), ".waqwaq", "config.json")); err == nil && cfg.Title != "" {
-		site = cfg.Title
-	}
-
-	for _, m := range metas {
-		page, err := st.Read(m.Slug)
-		if err != nil {
-			continue
-		}
-		html, _, err := rnd.Render(page.Body)
-		if err != nil {
-			continue
-		}
-		rewritten := template.HTML(wikiLinkHTML.ReplaceAllString(string(html), `${1}="/${2}.html${3}"`)) //nolint:gosec
-		var buf bytes.Buffer
-		_ = tmpl.Execute(&buf, map[string]any{"Title": page.Title, "Site": site, "Content": rewritten, "Pages": metas})
-		dest := filepath.Join(out, filepath.FromSlash(m.Slug)+".html")
-		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-			log.Fatalf("export: %v", err)
-		}
-		if err := os.WriteFile(dest, buf.Bytes(), 0o644); err != nil {
-			log.Fatalf("export: %v", err)
-		}
-	}
-
-	copyDir(filepath.Join(st.Root(), "assets"), filepath.Join(out, "assets"))
-	if sfs, err := server.StaticFS(); err == nil {
-		// The whole embedded static tree: stylesheet, favicon, and the
-		// self-hosted fonts the stylesheet references.
-		_ = fs.WalkDir(sfs, ".", func(p string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
-				return err
-			}
-			data, err := fs.ReadFile(sfs, p)
-			if err != nil {
-				return nil
-			}
-			dest := filepath.Join(out, "static", filepath.FromSlash(p))
-			if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-				return nil
-			}
-			_ = os.WriteFile(dest, data, 0o644)
-			return nil
-		})
-	}
-	fmt.Printf("Exported %d pages to %s\n", len(metas), out)
-	fmt.Printf("Serve it with any static file server, e.g. python3 -m http.server -d %s\n", out)
-}
-
-func copyDir(src, dst string) {
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return
-	}
-	_ = os.MkdirAll(dst, 0o755)
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		if data, err := os.ReadFile(filepath.Join(src, e.Name())); err == nil {
-			_ = os.WriteFile(filepath.Join(dst, e.Name()), data, 0o644)
-		}
-	}
-}
-
-func cmdPasswd(args []string) {
-	var pw string
-	if len(args) > 0 {
-		pw = args[0]
-	} else {
-		fmt.Fprint(os.Stderr, "Password: ")
-		sc := bufio.NewScanner(os.Stdin)
-		if sc.Scan() {
-			pw = sc.Text()
-		}
-	}
-	if pw == "" {
-		log.Fatal("passwd: empty password")
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
-	if err != nil {
-		log.Fatalf("passwd: %v", err)
-	}
-	fmt.Println(string(hash))
-}
-
 func cmdMCP(args []string) {
 	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
-	readOnly := fs.Bool("read-only", envBool("WAQWAQ_READ_ONLY"), "disable writes")
-	forceReview := fs.Bool("review", envBool("WAQWAQ_REVIEW"), "queue all writes for review")
+	lenient := fs.Bool("lenient", false, "serve even if the wiki is not OKF compliant")
 	rest := parseArgs(fs, args)
 	dir := "."
 	if len(rest) > 0 {
 		dir = rest[0]
 	}
-	st, err := store.New(dir)
+	c, cfg, err := buildCore(dir)
 	if err != nil {
 		log.Fatalf("mcp: %v", err)
 	}
-	go st.Warm()
-	cfg, _ := config.Load(filepath.Join(st.Root(), ".waqwaq", "config.json"))
-	reg, err := auth.Load(filepath.Join(st.Root(), ".waqwaq", "tokens.json"))
-	if err != nil {
-		log.Fatalf("mcp: %v", err)
-	}
-	q, err := review.New(st, cfg.Webhook)
-	if err != nil {
-		log.Fatalf("mcp: %v", err)
-	}
-	var searcher search.Searcher = st
-	if idx, err := search.New(st); err == nil {
-		searcher = idx
-		defer func() { _ = idx.Close() }()
-		go idx.Warm()
-	}
-	srv := mcpserver.New(st, q, reg, mcpserver.Options{
-		ReadOnly: *readOnly, ForceReview: *forceReview || cfg.Review, Rules: cfg.Lint, Search: searcher, Title: cfg.Title, Description: cfg.MCPDescription,
-	})
-	if err := mcpserver.ServeStdio(context.Background(), srv); err != nil && !errors.Is(err, io.EOF) {
+	enforceOKF(c, cfg, *lenient)
+	if err := mcpserver.ServeStdio(context.Background(), newMCP(c, cfg)); err != nil && !errors.Is(err, io.EOF) {
 		log.Fatalf("mcp: %v", err)
 	}
 }
 
-// kbFor returns the knowledge base a query verb runs against: a remote server's
-// /api when remote is set (or WAQWAQ_REMOTE), otherwise the local folder.
-func kbFor(remote, token, dir string) (kb.KnowledgeBase, error) {
-	if remote != "" {
-		return kbclient.New(remote, token), nil
+func cmdTUI(args []string) {
+	fs := flag.NewFlagSet("tui", flag.ExitOnError)
+	rest := parseArgs(fs, args)
+	dir := "."
+	if len(rest) > 0 {
+		dir = rest[0]
 	}
-	if dir == "" {
-		dir = "."
-	}
-	return store.New(dir)
-}
-
-func argAt(rest []string, i int) string {
-	if i < len(rest) {
-		return rest[i]
-	}
-	return ""
-}
-
-func refsJSON(metas []store.PageMeta) any {
-	type ref struct {
-		Slug  string `json:"slug"`
-		Title string `json:"title"`
-	}
-	out := make([]ref, len(metas))
-	for i, m := range metas {
-		out[i] = ref{Slug: m.Slug, Title: m.Title}
-	}
-	return out
-}
-
-func printJSON(v any) {
-	b, err := json.MarshalIndent(v, "", "  ")
+	c, _, err := buildCore(dir)
 	if err != nil {
-		log.Fatalf("json: %v", err)
+		log.Fatalf("tui: %v", err)
 	}
-	fmt.Println(string(b))
+	if err := tui.Run(c); err != nil {
+		log.Fatalf("tui: %v", err)
+	}
 }
 
-func remoteFlags(fs *flag.FlagSet) (*string, *string) {
-	return fs.String("remote", os.Getenv("WAQWAQ_REMOTE"), "query a remote waqwaq server URL instead of a local dir"),
-		fs.String("token", os.Getenv("WAQWAQ_TOKEN"), "bearer token for --remote")
-}
-
-type diag struct {
-	level string // ok, warn, fail, info
-	label string
-	msg   string
-}
-
-// cmdDoctor checks a wiki's setup, MCP/access posture, and health, exiting
-// non-zero on a problem. This is the "is this wired up right" check, distinct
-// from content linting.
 func cmdDoctor(args []string) {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
 	rest := parseArgs(fs, args)
@@ -587,543 +230,334 @@ func cmdDoctor(args []string) {
 	if len(rest) > 0 {
 		dir = rest[0]
 	}
-	if reportDiags(runDoctor(dir)) > 0 {
-		os.Exit(1)
-	}
-}
-
-func runDoctor(dir string) []diag {
-	var out []diag
-	add := func(level, label, msg string) { out = append(out, diag{level, label, msg}) }
-
-	if p, err := exec.LookPath("git"); err == nil {
-		add("ok", "git", "found at "+p)
-	} else {
-		add("fail", "git", "not on PATH; history, attribution, and review need git")
-	}
-
-	st, err := store.New(dir)
+	c, cfg, err := buildCore(dir)
 	if err != nil {
-		return append(out, diag{"fail", "wiki", err.Error()})
+		log.Fatalf("doctor: %v", err)
 	}
-	root := st.Root()
+	ctx := context.Background()
 
-	metas, _ := st.List()
-	mode := "vault mode (serving the folder itself)"
-	if fi, e := os.Stat(filepath.Join(root, "wiki")); e == nil && fi.IsDir() {
-		mode = "serving wiki/"
-	}
-	if len(metas) == 0 {
-		add("warn", "pages", "no markdown pages found; Waqwaq indexes .md files")
-	} else {
-		add("ok", "pages", fmt.Sprintf("%d markdown pages, %s", len(metas), mode))
-	}
-
-	if st.Instructions() != "" {
-		add("ok", "schema", "CLAUDE.md present; agents receive it as MCP instructions")
-	} else {
-		add("warn", "schema", "no CLAUDE.md; agents connect without a wiki schema")
-	}
-
-	var cfg config.Config
-	cfgPath := filepath.Join(root, ".waqwaq", "config.json")
-	if _, e := os.Stat(cfgPath); os.IsNotExist(e) {
-		add("ok", "config", "no config.json; using defaults")
-	} else if c, e := config.Load(cfgPath); e != nil {
-		add("fail", "config", "config.json is invalid: "+e.Error())
-	} else {
-		cfg = c
-		add("ok", "config", "config.json is valid")
-	}
-
-	if idx, e := search.New(st); e == nil {
-		_ = idx.Close()
-		add("ok", "search", "full-text search (SQLite FTS5)")
-	} else {
-		add("warn", "search", "substring search (the FTS5 index is not in this build)")
-	}
-
-	reg, tokErr := auth.Load(filepath.Join(root, ".waqwaq", "tokens.json"))
-	mcpTokened := tokErr == nil && reg.Enabled()
-	switch {
-	case tokErr != nil:
-		add("fail", "mcp", "tokens.json is invalid: "+tokErr.Error())
-	case mcpTokened:
-		add("ok", "mcp", "the MCP endpoint requires a bearer token")
-	default:
-		add("warn", "mcp", "the MCP endpoint is open; any caller that reaches the port can read and write the wiki")
-	}
-
-	webAuth := false
-	switch {
-	case cfg.Web.ProxyHeader != "":
-		add("info", "web", "identity from proxy header "+cfg.Web.ProxyHeader)
-		webAuth = true
-	case len(cfg.Web.Users) > 0:
-		add("info", "web", fmt.Sprintf("built-in login (%d user(s))", len(cfg.Web.Users)))
-		webAuth = true
-	default:
-		add("info", "web", "open; trusts local access on a loopback bind")
-	}
-	if webAuth && !mcpTokened {
-		add("fail", "posture", "the web UI requires login but the MCP endpoint is open; add .waqwaq/tokens.json")
-	}
-
-	if h, e := st.Health(); e == nil {
-		if n := len(h.Broken); n > 0 {
-			add("warn", "links", fmt.Sprintf("%d broken link(s) (see the Canopy, or waqwaq health tools)", n))
-		} else {
-			add("ok", "links", "no broken links")
+	check := func(ok bool, label, okMsg, warnMsg string) {
+		mark := "warn"
+		msg := warnMsg
+		if ok {
+			mark, msg = "ok", okMsg
 		}
-		add("info", "orphans", fmt.Sprintf("%d page(s) nothing links to", len(h.Orphans)))
-		if n := len(h.Stale); n > 0 {
-			add("info", "stale", fmt.Sprintf("%d page(s) untouched 90+ days", n))
-		}
+		fmt.Printf("[%s] %-10s %s\n", mark, label, msg)
 	}
-	return out
-}
 
-func reportDiags(out []diag) int {
-	sym := map[string]string{"ok": "✓", "warn": "⚠", "fail": "✗", "info": "·"}
-	warns, fails := 0, 0
-	for _, d := range out {
-		fmt.Printf("  %s %-9s %s\n", sym[d.level], d.label, d.msg)
-		switch d.level {
-		case "warn":
-			warns++
-		case "fail":
-			fails++
-		}
-	}
-	fmt.Printf("\n%d problem(s), %d warning(s)\n", fails, warns)
-	return fails
-}
-
-type checkFinding struct {
-	Slug     string `json:"slug,omitempty"`
-	Severity string `json:"severity"`
-	Message  string `json:"message"`
-}
-
-// runCheck lints every page and reports broken links, orphans, and stale pages.
-// It uses the resolved link graph for broken links (so basename and piped links
-// resolve), not lint's exact-match wikilink warning, which it drops.
-func runCheck(st *store.Store, rules lint.Rules) []checkFinding {
-	var out []checkFinding
-	metas, err := st.List()
+	res, err := c.List(ctx, "", "", "", 0, 0)
 	if err != nil {
-		return out
+		log.Fatalf("doctor: %v", err)
 	}
-	resolves, _ := st.LinkChecker()
-	for _, m := range metas {
-		page, err := st.Read(m.Slug)
-		if err != nil {
-			continue
-		}
-		for _, is := range lint.Check(page.Frontmatter, page.Body, resolves, rules) {
-			// Skip lint's wikilink warnings (the graph resolves links and Health
-			// reports the truly broken ones) and any title complaint (a page's
-			// title falls back to its H1 or filename, which every read surface uses).
-			if strings.Contains(is.Message, "wikilink") || strings.Contains(is.Message, "`title`") {
-				continue
-			}
-			out = append(out, checkFinding{m.Slug, is.Severity, is.Message})
-		}
+	check(res.Total > 0, "pages", fmt.Sprintf("%d concept pages", res.Total), "no pages found")
+
+	check(core.IsGitRepo(dir), "git", "git repo; page history available", "not a git repo; history unavailable")
+
+	check(instructionsFor(c) != "", "schema", "CLAUDE.md present; agents receive it", "no CLAUDE.md; agents connect without a schema")
+	check(cfg.Title != "", "identity", "title set: "+cfg.Title, "no title; MCP server identity defaults to \"wiki\"")
+
+	if cfg.Lenient {
+		fmt.Println("[warn] okf        lenient mode; OKF compliance NOT enforced")
+	} else {
+		fmt.Println("[ok] okf        OKF enforced; every concept page needs a type")
 	}
-	if h, err := st.Health(); err == nil {
-		for _, b := range h.Broken {
-			out = append(out, checkFinding{b.From, "error", "broken wikilink [[" + b.To + "]]"})
-		}
-		for _, o := range h.Orphans {
-			out = append(out, checkFinding{o.Slug, "warning", "orphan, nothing links here"})
-		}
-		for _, sp := range h.Stale {
-			out = append(out, checkFinding{sp.Slug, "warning", fmt.Sprintf("stale, untouched %d days", sp.Days)})
-		}
-	}
-	if len(metas) == 0 {
-		out = append(out, checkFinding{"", "error", "no markdown pages found"})
-	}
-	return out
 }
 
-func cmdCheck(args []string) {
-	fs := flag.NewFlagSet("check", flag.ExitOnError)
-	asJSON := fs.Bool("json", false, "emit findings as JSON")
-	strict := fs.Bool("strict", false, "treat warnings (orphans, stale) as failures too")
+// cmdValidate checks a bundle against the OKF spec (SPEC §9): every non-reserved
+// concept page has a non-empty `type` (a compliance error), plus broken links
+// (warnings, tolerated per §9). --strict also flags missing recommended fields
+// (title/description/timestamp), the profile Google's reference agent emits.
+// Exits non-zero on any compliance error or broken link, so it works in CI.
+func cmdValidate(args []string) {
+	fs := flag.NewFlagSet("validate", flag.ExitOnError)
+	asJSON := fs.Bool("json", false, "emit JSON")
+	strict := fs.Bool("strict", false, "also require title, description, timestamp (Google reference-agent profile)")
 	rest := parseArgs(fs, args)
 	dir := "."
 	if len(rest) > 0 {
 		dir = rest[0]
 	}
-	st, err := store.New(dir)
+	c, _, err := buildCore(dir)
 	if err != nil {
-		log.Fatalf("check: %v", err)
+		log.Fatalf("validate: %v", err)
 	}
-	cfg, _ := config.Load(filepath.Join(st.Root(), ".waqwaq", "config.json"))
-	findings := runCheck(st, cfg.Lint)
+	rep, err := core.Validate(context.Background(), c, *strict)
+	if err != nil {
+		log.Fatalf("validate: %v", err)
+	}
 
-	errs, warns := 0, 0
-	for _, f := range findings {
-		if f.Severity == "error" {
-			errs++
-		} else {
-			warns++
-		}
-	}
-	ok := errs == 0 && (!*strict || warns == 0)
 	if *asJSON {
-		printJSON(map[string]any{"errors": errs, "warnings": warns, "ok": ok, "findings": findings})
+		fmt.Printf("{\"pages\":%d,\"compliant\":%t,\"violations\":%d,\"broken_links\":%d,\"strict_misses\":%d}\n",
+			rep.Pages, rep.OK(), len(rep.Compliance), len(rep.BrokenLinks), len(rep.StrictMisses))
 	} else {
-		for _, f := range findings {
-			loc := f.Slug
-			if loc == "" {
-				loc = "(wiki)"
-			}
-			fmt.Printf("  %-7s %-26s %s\n", f.Severity, loc, f.Message)
+		for _, v := range rep.Compliance {
+			fmt.Println("error:  " + v)
 		}
-		if len(findings) == 0 {
-			fmt.Println("  no problems")
+		for _, v := range rep.StrictMisses {
+			fmt.Println("strict: " + v)
 		}
-		fmt.Printf("\n%d error(s), %d warning(s)\n", errs, warns)
+		for _, v := range rep.BrokenLinks {
+			fmt.Println("warn:   " + v)
+		}
+		status := "OKF compliant"
+		if !rep.OK() {
+			status = "NOT OKF compliant"
+		}
+		fmt.Printf("%d concept pages — %s (%d violations, %d broken links)\n",
+			rep.Pages, status, len(rep.Compliance), len(rep.BrokenLinks))
 	}
-	if !ok {
+	if !rep.OK() || len(rep.BrokenLinks) > 0 || len(rep.StrictMisses) > 0 {
 		os.Exit(1)
-	}
-}
-
-func cmdScan(args []string) {
-	fs := flag.NewFlagSet("scan", flag.ExitOnError)
-	rest := parseArgs(fs, args)
-	if len(rest) < 2 {
-		log.Fatal("usage: waqwaq scan <repo> <outdir>")
-	}
-	repo, out := rest[0], rest[1]
-	n, err := ingest.Go(repo, out)
-	if err != nil {
-		log.Fatalf("scan: %v", err)
-	}
-	fmt.Printf("Scanned %d packages into %s\n", n, filepath.Join(out, "wiki"))
-	fmt.Printf("Next: waqwaq tui %s   (or  waqwaq serve %s)\n", out, out)
-}
-
-func cmdTUI(args []string) {
-	fs := flag.NewFlagSet("tui", flag.ExitOnError)
-	remote, token := remoteFlags(fs)
-	rest := parseArgs(fs, args)
-	base, err := kbFor(*remote, *token, argAt(rest, 0))
-	if err != nil {
-		log.Fatalf("tui: %v", err)
-	}
-	if st, ok := base.(*store.Store); ok {
-		go st.Warm() // build the graph in the background so the first page's footer is ready
-	}
-	if err := tui.Run(base); err != nil {
-		log.Fatalf("tui: %v", err)
 	}
 }
 
 func cmdTOC(args []string) {
 	fs := flag.NewFlagSet("toc", flag.ExitOnError)
-	remote, token := remoteFlags(fs)
-	asJSON := fs.Bool("json", false, "emit JSON")
 	rest := parseArgs(fs, args)
-	base, err := kbFor(*remote, *token, argAt(rest, 0))
+	dir := "."
+	if len(rest) > 0 {
+		dir = rest[0]
+	}
+	c, _, err := buildCore(dir)
 	if err != nil {
 		log.Fatalf("toc: %v", err)
 	}
-	metas, err := base.List()
+	res, err := c.List(context.Background(), "", "", "", allPages, 0)
 	if err != nil {
 		log.Fatalf("toc: %v", err)
 	}
-	if *asJSON {
-		printJSON(refsJSON(metas))
-		return
+	for _, p := range res.Items {
+		fmt.Printf("%s\t%s\n", p.Slug, p.Title)
 	}
-	for _, m := range metas {
-		fmt.Printf("%s\t%s\n", m.Slug, m.Title)
+}
+
+// allPages is a limit large enough to return every page from List, for CLI verbs
+// that dump the whole wiki (List caps the slice at the true total).
+const allPages = 1 << 30
+
+func cmdRecent(args []string) {
+	fs := flag.NewFlagSet("recent", flag.ExitOnError)
+	limit := fs.Int("limit", 20, "how many pages to show")
+	rest := parseArgs(fs, args)
+	dir := "."
+	if len(rest) > 0 {
+		dir = rest[0]
+	}
+	c, _, err := buildCore(dir)
+	if err != nil {
+		log.Fatalf("recent: %v", err)
+	}
+	pages, err := c.Recent(context.Background(), *limit)
+	if err != nil {
+		log.Fatalf("recent: %v", err)
+	}
+	for _, p := range pages {
+		ts := p.Timestamp
+		if ts == "" {
+			ts = "-"
+		}
+		fmt.Printf("%s\t%s\t%s\n", ts, p.Slug, p.Title)
 	}
 }
 
 func cmdGrep(args []string) {
 	fs := flag.NewFlagSet("grep", flag.ExitOnError)
-	remote, token := remoteFlags(fs)
-	asJSON := fs.Bool("json", false, "emit JSON")
-	tag := fs.String("tag", "", "only pages carrying this frontmatter tag")
-	linksTo := fs.String("links-to", "", "only pages that link to this slug")
+	asRegex := fs.Bool("regex", false, "treat query as a regular expression")
+	typeFilter := fs.String("type", "", "narrow to an OKF type")
+	tagFilter := fs.String("tag", "", "narrow to a tag")
 	rest := parseArgs(fs, args)
-	if len(rest) == 0 {
-		log.Fatal("usage: waqwaq grep [flags] <query> [dir]")
+	if len(rest) == 0 || strings.TrimSpace(rest[0]) == "" {
+		log.Fatal("usage: waqwaq grep <query> [dir]")
 	}
-	base, err := kbFor(*remote, *token, argAt(rest, 1))
+	query := rest[0]
+	dir := "."
+	if len(rest) > 1 {
+		dir = rest[1]
+	}
+	c, _, err := buildCore(dir)
 	if err != nil {
 		log.Fatalf("grep: %v", err)
 	}
-	// With a --tag/--links-to scope, search within that set directly. Filtering
-	// the capped search hits would drop matches that ranked past the cap.
-	var hits []store.SearchHit
-	if scope := scopeSet(base, *tag, *linksTo); scope != nil {
-		hits = grepScoped(base, scope, rest[0])
-	} else {
-		hits, err = base.Search(rest[0])
-		if err != nil {
-			log.Fatalf("grep: %v", err)
-		}
-	}
-	if *asJSON {
-		printJSON(hits)
-		return
+	ctx := context.Background()
+	hits, err := c.Search(ctx, query, *asRegex, *typeFilter, *tagFilter, 0)
+	if err != nil {
+		log.Fatalf("grep: %v", err)
 	}
 	for _, h := range hits {
-		fmt.Printf("%s\t%s\n", h.Slug, strings.TrimSpace(h.Snippet))
+		fmt.Printf("%s\t%s\n", h.Slug, h.Context)
 	}
-}
-
-// scopeSet is the set of slugs allowed by --tag and --links-to (their
-// intersection), or nil when neither is set. This is graph-aware scoping plain
-// grep cannot express ("search only pages that link to X").
-func scopeSet(base kb.KnowledgeBase, tag, linksTo string) map[string]bool {
-	if tag == "" && linksTo == "" {
-		return nil
-	}
-	set := map[string]bool{}
-	first := true
-	narrow := func(slugs []string) {
-		next := map[string]bool{}
-		for _, s := range slugs {
-			if first || set[s] {
-				next[s] = true
+	// A silent empty result behind a type/tag filter is confusing; when the filter
+	// is the likely cause, show what values actually exist.
+	if len(hits) == 0 && (*typeFilter != "" || *tagFilter != "") {
+		if *typeFilter != "" {
+			fmt.Fprintf(os.Stderr, "no matches; types present: %s\n", strings.Join(distinctTypes(ctx, c), ", "))
+		}
+		if *tagFilter != "" {
+			if tags, err := c.Tags(ctx, nil); err == nil {
+				names := make([]string, len(tags))
+				for i, t := range tags {
+					names[i] = t.Tag
+				}
+				fmt.Fprintf(os.Stderr, "no matches; tags present: %s\n", strings.Join(names, ", "))
 			}
 		}
-		set, first = next, false
 	}
-	if tag != "" {
-		tags, err := base.Tags()
-		if err != nil {
-			log.Fatalf("grep: %v", err)
-		}
-		narrow(slugsOf(tags[tag]))
-	}
-	if linksTo != "" {
-		in, err := base.Backlinks(linksTo)
-		if err != nil {
-			log.Fatalf("grep: %v", err)
-		}
-		narrow(slugsOf(in))
-	}
-	return set
 }
 
-func slugsOf(metas []store.PageMeta) []string {
-	out := make([]string, len(metas))
-	for i, m := range metas {
-		out[i] = m.Slug
+// distinctTypes returns the sorted set of OKF types present in the wiki, for
+// hinting when a --type filter matched nothing.
+func distinctTypes(ctx context.Context, c core.Core) []string {
+	res, err := c.List(ctx, "", "", "", 0, 0)
+	if err != nil {
+		return nil
 	}
-	return out
-}
-
-// grepScoped searches within an explicit slug set (from --tag/--links-to) by
-// reading each page, so the result is complete rather than limited to the first
-// page of full-text hits.
-func grepScoped(base kb.KnowledgeBase, scope map[string]bool, query string) []store.SearchHit {
-	needle := strings.ToLower(strings.TrimSpace(query))
-	slugs := make([]string, 0, len(scope))
-	for s := range scope {
-		slugs = append(slugs, s)
-	}
-	sort.Strings(slugs)
-	var hits []store.SearchHit
-	for _, slug := range slugs {
-		page, err := base.Read(slug)
-		if err != nil || page == nil {
-			continue
+	seen := map[string]bool{}
+	var types []string
+	for _, p := range res.Items {
+		if p.Type != "" && !seen[p.Type] {
+			seen[p.Type] = true
+			types = append(types, p.Type)
 		}
-		if needle == "" {
-			hits = append(hits, store.SearchHit{Slug: slug, Title: page.Title})
-			continue
-		}
-		if !strings.Contains(strings.ToLower(page.Title+"\n"+page.Body), needle) {
-			continue
-		}
-		hits = append(hits, store.SearchHit{Slug: slug, Title: page.Title, Snippet: grepSnippet(page.Body, needle)})
 	}
-	return hits
-}
-
-func grepSnippet(body, needle string) string {
-	i := strings.Index(strings.ToLower(body), needle)
-	if i < 0 {
-		line := body
-		if nl := strings.IndexByte(line, '\n'); nl >= 0 {
-			line = line[:nl]
-		}
-		return strings.TrimSpace(line)
-	}
-	start := i - 30
-	if start < 0 {
-		start = 0
-	}
-	end := i + len(needle) + 30
-	if end > len(body) {
-		end = len(body)
-	}
-	return strings.TrimSpace(strings.ReplaceAll(body[start:end], "\n", " "))
+	sort.Strings(types)
+	return types
 }
 
 func cmdCat(args []string) {
 	fs := flag.NewFlagSet("cat", flag.ExitOnError)
-	remote, token := remoteFlags(fs)
-	doRender := fs.Bool("render", false, "render the markdown for the terminal")
+	doRender := fs.Bool("render", false, "render markdown for the terminal")
 	rest := parseArgs(fs, args)
 	if len(rest) == 0 {
-		log.Fatal("usage: waqwaq cat [flags] <slug> [dir]")
+		log.Fatal("usage: waqwaq cat <slug> [dir]")
 	}
-	base, err := kbFor(*remote, *token, argAt(rest, 1))
+	slug := rest[0]
+	dir := "."
+	if len(rest) > 1 {
+		dir = rest[1]
+	}
+	c, _, err := buildCore(dir)
 	if err != nil {
 		log.Fatalf("cat: %v", err)
 	}
-	slug := rest[0]
-	page, err := base.Read(slug)
-	if err != nil {
-		if canon, ok := base.ResolveLink(slug); ok {
-			page, err = base.Read(canon)
-		}
-	}
+	page, err := c.Read(context.Background(), slug)
 	if err != nil {
 		log.Fatalf("cat: %v", err)
 	}
 	if *doRender {
-		if out, rerr := glamour.Render(page.Body, "auto"); rerr == nil {
-			fmt.Print(out)
-			return
+		out, err := glamour.Render(page.Body, glamourStyle())
+		if err != nil {
+			log.Fatalf("cat: %v", err)
 		}
+		fmt.Print(out)
+		return
 	}
-	if page.Raw != "" {
-		fmt.Print(page.Raw)
-	} else {
-		fmt.Print(page.Body)
-	}
+	fmt.Println(page.Body)
 }
 
-const staticPageHTML = `<!doctype html>
-<html lang="en" data-theme="auto">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{.Title}} · {{.Site}}</title>
-<meta name="color-scheme" content="light dark">
-<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-<link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-<div class="layout">
-  <aside class="sidebar">
-    <a class="brand" href="/index.html">🌳 {{.Site}}</a>
-    <nav>{{range .Pages}}<a class="nav-link" href="/{{.Slug}}.html">{{.Title}}</a>{{end}}</nav>
-  </aside>
-  <main class="content"><article class="markdown">{{.Content}}</article></main>
-</div>
-<script type="module">
-  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-  mermaid.initialize({ startOnLoad: true, theme: 'neutral' });
-</script>
-</body>
-</html>
-`
+func glamourStyle() string {
+	if strings.Contains(strings.ToLower(os.Getenv("COLORFGBG")), "15;") {
+		return "light"
+	}
+	return "dark"
+}
 
-// parseArgs parses flags that may appear before, after, or between positional
-// arguments, returning the positionals in order. The stdlib flag package stops
-// at the first positional, so we resume parsing after each one.
+func cmdInit(args []string) {
+	fs := flag.NewFlagSet("init", flag.ExitOnError)
+	rest := parseArgs(fs, args)
+	if len(rest) == 0 {
+		log.Fatal("usage: waqwaq init <dir>")
+	}
+	abs, err := filepath.Abs(rest[0])
+	if err != nil {
+		log.Fatalf("init: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(abs, "wiki"), 0o755); err != nil {
+		log.Fatalf("init: %v", err)
+	}
+	files := map[string]string{
+		"CLAUDE.md":                sampleSchema,
+		"wiki/index.md":            sampleIndex,
+		"wiki/datasets/example.md": sampleDataset,
+	}
+	for rel, content := range files {
+		p := filepath.Join(abs, rel)
+		if _, err := os.Stat(p); err == nil {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			log.Fatalf("init: %v", err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			log.Fatalf("init: %v", err)
+		}
+	}
+	fmt.Printf("Initialised a waqwaq wiki in %s\n", abs)
+	fmt.Printf("Next: waqwaq serve %s\n", rest[0])
+}
+
+// parseArgs parses flags that may appear before or after positional arguments.
+// Go's flag package stops at the first non-flag token, so `serve <dir> --addr x`
+// would otherwise drop --addr. This interleaves: parse flags, take one
+// positional, repeat.
 func parseArgs(fs *flag.FlagSet, args []string) []string {
 	var positionals []string
 	for {
-		_ = fs.Parse(args)
-		if fs.NArg() == 0 {
+		if err := fs.Parse(args); err != nil {
 			return positionals
 		}
-		positionals = append(positionals, fs.Arg(0))
-		args = fs.Args()[1:]
+		rest := fs.Args()
+		if len(rest) == 0 {
+			return positionals
+		}
+		positionals = append(positionals, rest[0])
+		args = rest[1:]
 	}
 }
 
-func envBool(key string) bool {
-	switch os.Getenv(key) {
-	case "1", "true", "TRUE", "yes":
-		return true
-	}
-	return false
+func flagSet(fs *flag.FlagSet, name string) bool {
+	set := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			set = true
+		}
+	})
+	return set
 }
-
-const sampleIndex = `---
-title: Home
----
-
-# Welcome to Waqwaq
-
-A git-backed markdown wiki that **humans browse** and **AI agents read and write**, served from one binary over one port.
-
-- Browse pages from the sidebar.
-- Point an MCP client at ` + "`/mcp`" + ` to let an agent read and update these pages.
-- Every write runs through lint and lands as a git commit, so nothing rots silently.
-
-` + "```mermaid" + `
-flowchart LR
-  Human([Human]) -->|browse / approve| Wiki[(Markdown + git)]
-  Agent([AI agent]) -->|MCP read / write| Wiki
-  Wiki -->|lint on write| Agent
-` + "```" + `
-
-See [[concepts/mcp]] for how an agent connects.
-`
-
-const sampleMCP = `---
-title: MCP integration
----
-
-# MCP integration
-
-Waqwaq serves a Model Context Protocol endpoint at ` + "`/mcp`" + ` (streamable HTTP) from the same
-process as the web UI.
-
-## Tools
-
-- Read the wiki with ` + "`wiki_list`" + `, ` + "`wiki_read`" + `, ` + "`wiki_search`" + `, and ` + "`wiki_graph`" + `.
-- Work with raw documents under ` + "`raw/`" + ` using ` + "`wiki_list_raw`" + `, ` + "`wiki_read_raw`" + `, and ` + "`wiki_ingest`" + `.
-- Dry-run the write checks with ` + "`wiki_lint`" + `.
-- Create or replace a page with ` + "`wiki_write`" + `. Lint runs first; errors block the write.
-
-## Example handler
-
-` + "```go" + `
-mcp.AddTool(s, &mcp.Tool{Name: "wiki_read"}, func(
-	ctx context.Context, req *mcp.CallToolRequest, in readIn,
-) (*mcp.CallToolResult, readOut, error) {
-	page, err := st.Read(in.Slug)
-	if err != nil {
-		return nil, readOut{}, err
-	}
-	return nil, readOut{Slug: page.Slug, Title: page.Title, Content: page.Raw}, nil
-})
-` + "```" + `
-
-Back to [[index]].
-`
 
 const sampleSchema = `# Wiki schema
 
-This is a Waqwaq wiki. The source of truth is markdown under ` + "`wiki/`" + `, versioned with git.
-Raw documents to synthesise pages from live under ` + "`raw/`" + `.
+A read-only OKF wiki served by waqwaq. Pages are markdown under ` + "`wiki/`" + `,
+versioned with git. Each concept page carries YAML frontmatter with a ` + "`type`" + `
+and may set ` + "`description`" + `, ` + "`resource`" + ` (an external asset URL),
+` + "`tags`" + `, and ` + "`timestamp`" + `. Link pages with ` + "`[[slug]]`" + `
+wikilinks or relative ` + "`.md`" + ` links.
+`
 
-## Pages
+const sampleIndex = `---
+title: Example Catalog
+type: Index
+description: Entry point for this example OKF wiki.
+---
 
-- One concept per page. The file path under ` + "`wiki/`" + ` is the slug.
-- Begin each page with YAML frontmatter containing a ` + "`title`" + `.
-- Link between pages with ` + "`[[slug]]`" + ` or ` + "`[[slug|label]]`" + ` wikilinks.
+# Example Catalog
 
-## Writing via MCP
+A small OKF-structured catalog served read-only by waqwaq.
 
-- Read with ` + "`wiki_list`" + `, ` + "`wiki_read`" + `, ` + "`wiki_search`" + `, ` + "`wiki_graph`" + `.
-- Add raw documents with ` + "`wiki_ingest`" + `; read them with ` + "`wiki_list_raw`" + ` and ` + "`wiki_read_raw`" + `.
-- Create or replace pages with ` + "`wiki_write`" + `. Lint runs first; a missing title blocks the write.
-- Depending on your access, a write either commits or is queued for review. Check the returned status and the queue with ` + "`wiki_list_proposals`" + `.
+## Datasets
+
+- [[datasets/example]] — an example dataset
+`
+
+const sampleDataset = `---
+title: Example Dataset
+type: Dataset
+description: An example dataset to show OKF frontmatter.
+resource: https://example.com/datasets/example
+tags: [example, demo]
+timestamp: 2026-01-01T00:00:00Z
+---
+
+# Example Dataset
+
+Replace this with a real dataset. Back to [[index]].
 `

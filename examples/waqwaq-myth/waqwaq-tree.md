@@ -1,5 +1,10 @@
 ---
 title: Waq-Waq tree
+type: Legend
+description: The legendary tree of Arabic and Indo-Persian lore whose fruit grew as human heads or women and cried out "waq waq".
+resource: https://en.wikipedia.org/wiki/Wak-Wak
+tags: [waqwaq, tree, marvels, persian]
+timestamp: 2026-06-01T00:00:00Z
 ---
 
 # Waq-Waq tree

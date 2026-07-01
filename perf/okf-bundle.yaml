@@ -1,0 +1,58 @@
+# Interop check against a real, unmodified Google OKF bundle (crypto_bitcoin).
+# Proves waqwaq reads an upstream bundle end-to-end over MCP, including that
+# relative markdown links (`[blocks](../tables/blocks.md)`), not [[wikilinks]],
+# resolve into backlinks, neighbours, and the graph.
+#
+#   ocarina play perf/okf-bundle.yaml
+keys:
+  dir: examples/okf-crypto-bitcoin
+
+server:
+  command: ./waqwaq
+  args: [mcp, "{{dir}}"]
+
+rondo:
+  - name: concept catalog excludes reserved index files
+    tool: wiki_list
+    expect:
+      matches: '"total":\s*5'
+
+  - name: filter to BigQuery Tables by OKF type
+    tool: wiki_list
+    args: { type: "BigQuery Table" }
+    expect:
+      contains: tables/blocks
+
+  - name: read the dataset page, relative links inlined as outbound edges
+    tool: wiki_read
+    args: { slug: datasets/crypto_bitcoin }
+    expect:
+      contains: tables/blocks
+
+  - name: backlinks resolve from a relative .md link
+    tool: wiki_backlinks
+    args: { slug: tables/blocks }
+    expect:
+      contains: datasets/crypto_bitcoin
+
+  - name: neighbours of the dataset include its tables
+    tool: wiki_neighbors
+    args: { slug: datasets/crypto_bitcoin, depth: 1 }
+    expect:
+      contains: tables/transactions
+
+  - name: recent lists pages by OKF timestamp, freshest first
+    tool: wiki_recent
+    args: { limit: 3 }
+    expect:
+      contains: timestamp
+
+  - name: index.md is readable as the entry point though not a concept
+    resource: "wiki://page/index"
+    expect:
+      contains: Subdirectories
+
+  - name: graph carries typed nodes and edges from relative links
+    tool: wiki_graph
+    expect:
+      matches: '"type":\s*"BigQuery Table"'

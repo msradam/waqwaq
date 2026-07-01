@@ -1,0 +1,123 @@
+{{define "content"}}
+<div class="graphview">
+  <h1>Graph</h1>
+  <p class="muted">Nodes are pages, colored by OKF type. Drag to pan, scroll to zoom, click a node to open it.</p>
+  <canvas id="graph" width="1000" height="640"></canvas>
+  <div id="legend" class="legend"></div>
+</div>
+<script>
+// Small self-contained force-directed layout over /graph.json. No CDN, no deps.
+(function () {
+  const canvas = document.getElementById('graph');
+  const ctx = canvas.getContext('2d');
+  let nodes = [], edges = [], byId = {};
+  let view = { x: 0, y: 0, k: 1 };
+
+  // Open vocabulary: hash a type string to a stable hue with a catch-all.
+  function colorFor(type) {
+    if (!type) return 'hsl(0 0% 60%)';
+    let h = 0;
+    for (let i = 0; i < type.length; i++) h = (h * 31 + type.charCodeAt(i)) % 360;
+    return 'hsl(' + h + ' 55% 52%)';
+  }
+
+  function layout() {
+    for (const n of nodes) {
+      n.fx += (Math.random() - 0.5) * 0.01; // deterministic-ish jitter break
+    }
+    for (let iter = 0; iter < 220; iter++) {
+      for (const a of nodes) { a.vx = 0; a.vy = 0; }
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const a = nodes[i], b = nodes[j];
+          let dx = a.x - b.x, dy = a.y - b.y;
+          let d2 = dx * dx + dy * dy || 0.01;
+          const f = 900 / d2;
+          const d = Math.sqrt(d2);
+          a.vx += (dx / d) * f; a.vy += (dy / d) * f;
+          b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
+        }
+      }
+      for (const e of edges) {
+        const a = byId[e.from], b = byId[e.to];
+        if (!a || !b) continue;
+        let dx = b.x - a.x, dy = b.y - a.y;
+        const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+        const f = (d - 90) * 0.02;
+        a.vx += (dx / d) * f; a.vy += (dy / d) * f;
+        b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
+      }
+      const cx = canvas.width / 2, cy = canvas.height / 2;
+      for (const n of nodes) {
+        n.vx += (cx - n.x) * 0.002; n.vy += (cy - n.y) * 0.002;
+        n.x += Math.max(-8, Math.min(8, n.vx));
+        n.y += Math.max(-8, Math.min(8, n.vy));
+      }
+    }
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.translate(view.x, view.y); ctx.scale(view.k, view.k);
+    ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+    for (const e of edges) {
+      const a = byId[e.from], b = byId[e.to];
+      if (!a || !b) continue;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    }
+    for (const n of nodes) {
+      const r = 5 + Math.min(10, n.degree);
+      ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = colorFor(n.type); ctx.fill();
+      ctx.fillStyle = '#222'; ctx.font = '11px sans-serif';
+      ctx.fillText(n.title || n.slug, n.x + r + 2, n.y + 3);
+    }
+    ctx.restore();
+  }
+
+  function legend(types) {
+    const el = document.getElementById('legend');
+    el.innerHTML = '';
+    for (const t of types) {
+      const s = document.createElement('span');
+      s.className = 'legend-item';
+      s.innerHTML = '<i style="background:' + colorFor(t) + '"></i>' + (t || 'untyped');
+      el.appendChild(s);
+    }
+  }
+
+  function screenToWorld(mx, my) {
+    return { x: (mx - view.x) / view.k, y: (my - view.y) / view.k };
+  }
+
+  canvas.addEventListener('click', function (ev) {
+    const rect = canvas.getBoundingClientRect();
+    const p = screenToWorld(ev.clientX - rect.left, ev.clientY - rect.top);
+    let hit = null, best = 1e9;
+    for (const n of nodes) {
+      const d = (n.x - p.x) ** 2 + (n.y - p.y) ** 2;
+      const r = 5 + Math.min(10, n.degree);
+      if (d < r * r && d < best) { best = d; hit = n; }
+    }
+    if (hit) location.href = '/wiki/' + hit.slug;
+  });
+  let drag = null;
+  canvas.addEventListener('mousedown', e => drag = { x: e.clientX - view.x, y: e.clientY - view.y });
+  window.addEventListener('mouseup', () => drag = null);
+  window.addEventListener('mousemove', e => { if (drag) { view.x = e.clientX - drag.x; view.y = e.clientY - drag.y; draw(); } });
+  canvas.addEventListener('wheel', e => { e.preventDefault(); const s = e.deltaY < 0 ? 1.1 : 0.9; view.k *= s; draw(); }, { passive: false });
+
+  fetch('/graph.json').then(r => r.json()).then(g => {
+    nodes = (g.nodes || []).map((n, i) => ({
+      ...n, x: 500 + Math.cos(i) * 200, y: 320 + Math.sin(i) * 200, fx: 0, vx: 0, vy: 0,
+    }));
+    edges = g.edges || [];
+    for (const n of nodes) byId[n.slug] = n;
+    layout();
+    draw();
+    legend([...new Set(nodes.map(n => n.type))]);
+  });
+})();
+</script>
+{{end}}

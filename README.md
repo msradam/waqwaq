@@ -7,105 +7,153 @@
 
 # Waqwaq
 
-A git-backed markdown wiki that humans browse and AI agents read and write, from one binary over one port.
+A single directory of OKF markdown, read at once through MCP, a web view, and a terminal view. Every surface resolves to the same stateless operations over the same files, so they never disagree.
 
 ## What it is
 
-Waqwaq serves a folder of markdown two ways at once: a web UI for people to read, search, and edit, and a Model Context Protocol (MCP) endpoint on the same port for agents to read and write. Every page is a markdown file versioned with git, so changes have history, blame, and rollback. Agent writes pass a lint step first and commit with the author recorded.
+Waqwaq serves a git-backed folder of [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) markdown three ways from one binary: an MCP endpoint for agents, a web view for people, and a terminal reader. OKF bundles are directories of markdown with a small set of YAML frontmatter fields (`type`, `description`, `resource`, `tags`, `timestamp`). Pages under `wiki/` are the source of truth; point waqwaq at a folder with no `wiki/` subdirectory and it serves that folder directly.
 
-The native layout is Andrej Karpathy's LLM wiki convention: pages under `wiki/`, raw documents under `raw/`, a `CLAUDE.md` schema at the root. Point it at a folder with no `wiki/` subdirectory and it serves the folder itself, so an existing notes folder or Obsidian vault works as-is.
+waqwaq is opinionated: it is an OKF server, and it enforces the format. It refuses to serve a bundle that is not OKF compliant (every concept page must carry a `type`, per the spec). To serve plain markdown that is not an OKF bundle, opt out with `--lenient` or `"lenient": true` in config.
 
-## Demo
+This is a read-only baseline. There is no write path on any surface: no editing, uploading, or mutation tools. The value it protects is that many readers see one consistent knowledge base with no coordination between them, because the core is stateless and re-derives every answer from the filesystem and git on each call.
 
-A terminal reader over your wiki; press `r` to walk a page's links.
-
-<p align="center"><img src="demo/tui.gif" width="760" alt="terminal reader"></p>
-
-Scriptable verbs (`toc`, `grep`, `cat --render`), and a `doctor` that checks the setup and the MCP/access posture.
-
-<p align="center"><img src="demo/cli.gif" width="760" alt="CLI verbs"></p>
-<p align="center"><img src="demo/doctor.gif" width="760" alt="doctor diagnostic"></p>
-
-Generate a wiki from a codebase: one page per package, linked by the real import graph.
-
-<p align="center"><img src="demo/scan.gif" width="760" alt="scan a Go module"></p>
-
-## Quickstart
+## Install
 
 ```bash
 go install github.com/msradam/waqwaq@latest   # or: go build -o waqwaq .
-waqwaq init mywiki                             # or point serve at an existing folder
-waqwaq serve mywiki
 ```
 
-The web UI is at `http://127.0.0.1:8000/`, the MCP endpoint at `/mcp`. Connect an agent with a `.mcp.json`:
+Pure Go, no cgo. Cross-compiles to any `GOOS`/`GOARCH` with plain `go build` (verified with `CGO_ENABLED=0`). Git history is read in-process via go-git, so no `git` binary is required on the host.
+
+## Usage
+
+```bash
+waqwaq serve examples/okf-demo          # web view + MCP on one port
+```
+
+The web view is at `http://127.0.0.1:8000/`, the MCP endpoint at `/mcp`. Connect an agent with a `.mcp.json`:
 
 ```json
-{ "mcpServers": { "mywiki": { "type": "http", "url": "http://127.0.0.1:8000/mcp" } } }
+{ "mcpServers": { "wiki": { "type": "http", "url": "http://127.0.0.1:8000/mcp" } } }
 ```
 
 Or, with no running server, as a stdio subprocess:
 
 ```json
-{ "mcpServers": { "mywiki": { "command": "waqwaq", "args": ["mcp", "/path/to/wiki"] } } }
+{ "mcpServers": { "wiki": { "command": "waqwaq", "args": ["mcp", "/path/to/wiki"] } } }
 ```
 
-Ask the agent to read the wiki and add a page: it writes markdown to disk, lint-checked and committed to git, and the page appears in the browser. Run with `--review` and agent writes become proposals you approve from `/proposals`; the merge records who proposed and who approved.
-
-## OKF support
-
-Waqwaq serves [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) bundles natively. OKF bundles are directories of markdown files with a small set of standard YAML frontmatter fields: `type`, `description`, `resource`, `tags`, `timestamp`. Agents can query by type, follow `resource` links to the actual data assets, and reason about the knowledge graph.
-
-Serving an OKF bundle with waqwaq gives you:
-
-- `wiki_list` accepts a `type` parameter. `{ "type": "BigQuery Table" }` returns only matching pages, each with the full OKF metadata in the response.
-- `wiki_graph` nodes include the OKF `type` field, so an agent can see what kind of thing each node is.
-- The `/oracle` graph view colors nodes by type with a legend.
-- Set `"okf": true` in config to require a `type` field on all pages, blocking writes that omit it.
-
-Try the included example:
+Other commands:
 
 ```bash
-waqwaq serve examples/okf-demo
+waqwaq tui    <dir>            browse in a terminal reader
+waqwaq doctor <dir>            check setup and MCP posture
+waqwaq validate <dir> [--json] [--strict]   check OKF compliance and links, for CI (non-zero on problems)
+waqwaq toc    <dir>            list pages as slug<tab>title
+waqwaq recent <dir> [--limit]  list pages by OKF timestamp, freshest first
+waqwaq grep   <query> <dir>    full-text search; --regex, --type, --tag
+waqwaq cat    <slug> <dir>     print a page; --render for terminal markdown
+waqwaq init   <dir>            scaffold a small OKF wiki
 ```
 
-That's a small data catalog with datasets, BigQuery tables, and a metric, configured with `"okf": true`. Point any MCP client at it and ask "list all BigQuery Table docs" to see the type filter in action.
+## Documentation
 
-If you're using Google's OKF [enrichment agent](https://github.com/GoogleCloudPlatform/knowledge-catalog) to walk a BigQuery dataset and write OKF bundles to disk, point waqwaq at that same output directory.
+- [docs/mcp.md](docs/mcp.md) — MCP reference: resources, every tool, argument and object shapes, the orient/navigate flow.
+- [docs/architecture.md](docs/architecture.md) — how it is built: the Core interface, the caching design, data flow, and trade-offs.
+- [BASELINE-NOTES.md](BASELINE-NOTES.md) — decision history and what earlier versions had that this deliberately cuts.
 
 ## Surfaces
 
-One folder, reached however you work. The read surfaces share one core, so their answers are identical.
+All three read surfaces share one stateless core, so their answers are identical.
 
-- **Web UI** (`waqwaq serve`): browse, search, edit, image upload, plus the `/health` "Canopy" (orphans, broken and stale links) and the `/oracle` force-directed link graph with OKF type coloring.
-- **MCP**: streamable HTTP at `/mcp`, or stdio via `waqwaq mcp <dir>`. The server name is the wiki's `title` from config; set `mcp_description` for a custom one-liner in the instructions.
-- **CLI**: `waqwaq toc | grep | cat --render`, scriptable, with `--tag` / `--links-to` to scope search by the graph and `--json` for pipelines. Add `--remote URL` (or `WAQWAQ_REMOTE`) to query a running server.
-- **TUI** (`waqwaq tui <dir>`): a terminal reader with filter, search, rendered pages, and `r` to walk the link graph.
-- **JSON API**: `/api/pages`, `/api/search`, `/api/page/<slug>`, `/api/graph` (nodes include OKF type), and the graph queries, for non-MCP clients.
-- **Static export** (`waqwaq export <dir> <out>`): a standalone HTML site for any static host, including GitHub Pages.
-- **Codebase to wiki** (`waqwaq scan <go-repo> <out>`): one page per Go package, linked by the real import graph, no model required.
+- **MCP** (`serve`, or `mcp` over stdio). Resources are the primary read interface: the template `wiki://page/{slug}` reads any page's body, and `resources/list` enumerates every concept page. Tools cover the genuine queries: `wiki_info` (confirm the connected wiki), `wiki_list` (filter by prefix, type, tag; paged with `total`/`truncated`), `wiki_read` (body plus inlined outbound and inbound links, each with title and type), `wiki_search` (keyword AND, or regex, narrowable by type and tag), `wiki_backlinks`, `wiki_neighbors`, `wiki_tags`, `wiki_hubs`, `wiki_recent` (pages by OKF timestamp, freshest first), `wiki_graph`, `wiki_history`. Every tool is annotated read-only; there are no mutation tools. For navigation prefer `wiki_read` over the raw resource: it also returns parsed frontmatter and resolved links.
+- **Web view** (`serve`). Browse, read rendered markdown with a table of contents and a links sidebar, search, and a client-side force-directed graph coloured by OKF type. One built-in stylesheet, no configuration.
+- **Terminal reader** (`tui`). Browse, fuzzy-filter, full-text search, read rendered pages, and walk a page's links.
 
-Diagnostics: `waqwaq doctor [dir]` checks setup and the MCP/access posture; `waqwaq check [dir]` lints pages and links for CI.
+`wiki_read` and the `wiki://page/{slug}` resource return the same data; the tool exists for clients without the resources primitive.
 
-## MCP tools
+## OKF support
 
-- **Read**: `wiki_list` (with `prefix` and `type` filters; returns OKF metadata), `wiki_read`, `wiki_search`, `wiki_graph` (nodes include `type` and `degree`).
-- **Navigate**: `wiki_hubs`, `wiki_neighbors`, `wiki_path`, `wiki_backlinks`, `wiki_tags`.
-- **Maintain**: `wiki_health`, `wiki_recent`, `wiki_history`.
-- **Raw documents**: `wiki_list_raw`, `wiki_read_raw`, `wiki_ingest`, `wiki_delete_raw`.
-- **Write and review**: `wiki_lint`, `wiki_write`, `wiki_delete`, `wiki_list_proposals`.
+Waqwaq reads the OKF frontmatter fields and exposes them across every surface:
 
-Read tools are always available; write tools require non-read-only mode. `wiki_write` and `wiki_delete` follow the same access model: a trusted caller commits to git directly, anyone else (or `--review`) queues a proposal recoverable from git history.
+- `wiki_list` and `wiki_search` accept a `type` filter, so an agent can ask for all `BigQuery Table` or all `Metric` pages.
+- `wiki_read` and the page resource inline each neighbour's slug, title, and type, so an agent navigates without a read per neighbour.
+- The graph view colours nodes by type using an open palette, so producer-defined types (any string, often multi-word) render without a fixed vocabulary.
+- The link resolver understands both `[[wikilinks]]` and relative `.md` links (`[Orders](../tables/orders.md)`), which is how upstream OKF bundles express edges, so a real Google bundle graphs correctly.
+- `resource` frontmatter is treated as an external deep-link to the underlying asset, distinct from links between pages.
+- `index.md` and `log.md` are reserved: exempt from the type requirement and not treated as concept pages. `index.md` is the natural entry point.
+- OKF compliance (a `type` on every concept page) is enforced by default: `serve` and `mcp` refuse to start on a non-compliant bundle, and `waqwaq validate` reports the offenders.
 
-## Existing knowledge bases
+Waqwaq follows the [OKF specification](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) v0.1: `type` is the only required field, unknown types and extra frontmatter keys are preserved, and reserved files are treated as navigation rather than concepts.
 
-The native format is clean markdown with YAML frontmatter and `[[wikilinks]]`. Waqwaq also reads existing knowledge bases with tolerant link resolution: bare `[[wikilinks]]` resolve by basename anywhere in the tree, case and space and hyphen are folded, and a piped `[[a|b]]` resolves from either side. Frontmatter is read as YAML, TOML, or JSON.
+### Examples
 
-Obsidian vaults, Quartz and Foam gardens, GitHub project wikis, Dendron vaults, and Hugo or Zola sites serve and navigate. It does not write back in another tool's conventions, nor interpret format-specific models like Logseq block references or Dendron's filename hierarchy.
+Four OKF bundles ship under `examples/`:
+
+- `okf-crypto-bitcoin/` and `okf-ga4/` are real bundles vendored unmodified from Google's [knowledge-catalog](https://github.com/GoogleCloudPlatform/knowledge-catalog) (Apache 2.0, see [examples/NOTICE.md](examples/NOTICE.md)). They exercise genuine interoperability: concepts linked by relative `.md` paths, frontmatter-less `index.md` directory listings, and `type` values like `BigQuery Table` and `Reference`.
+- `okf-demo/` is a small hand-made data catalog used as the deterministic test fixture.
+- `waqwaq-myth/` is an OKF bundle in a non-data-catalog domain (the medieval Waq-Waq legend), showing the open type vocabulary (`Legend`, `Place`, `Reference`).
+
+```bash
+waqwaq serve examples/okf-crypto-bitcoin   # a real Google OKF bundle
+```
+
+### Validating a bundle
+
+`waqwaq validate` checks a bundle against the OKF spec (every non-reserved concept page has a non-empty `type`) and reports broken links:
+
+```bash
+waqwaq validate examples/okf-ga4           # spec conformance: type required
+waqwaq validate --strict examples/okf-ga4  # also require description, timestamp
+```
+
+The default matches the spec (only `type` is required; broken links are warnings, since the spec forbids rejecting a bundle for them). `--strict` also requires the recommended fields Google's reference enrichment agent emits. `serve`/`mcp` run the same compliance check at startup and refuse to serve a non-compliant bundle.
+
+There is no official runnable OKF validator (the reference tooling is Python and needs a Google Cloud account), so this implements the spec's conformance rules directly in Go, exposed as `core.Validate` for library use.
+
+### Testing against upstream bundles
+
+`hack/fetch-upstream-bundles.sh` fetches Google's real OKF bundles (crypto_bitcoin, ga4, stackoverflow) into `examples/upstream/` (gitignored) so you can validate and serve real third-party OKF data:
+
+```bash
+./hack/fetch-upstream-bundles.sh
+waqwaq validate examples/upstream/stackoverflow
+waqwaq serve    examples/upstream/stackoverflow
+```
+
+## Scale
+
+The core is stateless in result (every call reflects the current filesystem) but
+caches derived work so it holds up on large wikis. It memoizes parsed frontmatter
+per file (keyed by mtime and size) and the derived link graph (keyed by a corpus
+signature), rebuilding only what changed. A refresh window (default one second)
+lets a burst of reads share a single filesystem walk; `serve` warms the cache in
+the background so the first request is not cold.
+
+Measured at 100,000 pages (darwin/arm64): a warm `List` or `Read` is well under a
+millisecond; the one-time cold parse of the whole corpus is a few seconds and is
+backgrounded on `serve`. All surfaces share the one cache, so they never
+disagree.
+
+Generate a large OKF wiki to test against:
+
+```bash
+go run ./hack/genokf -out /tmp/bigwiki -pages 100000
+waqwaq serve /tmp/bigwiki
+```
+
+As a library:
+
+```go
+import "github.com/msradam/waqwaq/core"
+
+c, _ := core.New("/path/to/okf-bundle", true, core.WithRefreshInterval(0))
+pages, _ := c.List(ctx, "", "BigQuery Table", "", 50, 0)
+```
+
+`core.Core` is the read-only interface every surface (MCP, web, TUI) resolves to.
 
 ## Configuration
-
-`waqwaq serve [dir]` flags: `--addr` (default `127.0.0.1:8000`), `--read-only`, `--review`, `--tokens FILE`. Each has a `WAQWAQ_*` environment equivalent.
 
 Optional settings live in `<dir>/.waqwaq/config.json`, all fields optional:
 
@@ -113,61 +161,49 @@ Optional settings live in `<dir>/.waqwaq/config.json`, all fields optional:
 {
   "title": "Acme Data Catalog",
   "mcp_description": "Acme's internal data catalog: datasets, tables, and metrics",
-  "accent": "madder",
-  "theme": "manuscript",
-  "okf": true,
-  "webhook": "https://hooks.slack.com/services/XXX",
-  "web": {
-    "proxy_header": "X-Forwarded-User",
-    "default_role": "viewer",
-    "admins": ["adam"],
-    "editors": ["dev"]
-  },
-  "lint": {
-    "require_frontmatter": ["owner"],
-    "banned_terms": [{ "term": "TODO", "severity": "warning" }]
-  }
+  "addr": "127.0.0.1:8000"
 }
 ```
 
-Config fields:
+- `title`: display name and MCP server identity. An MCP client sees this as the server name, not "waqwaq".
+- `mcp_description`: one-liner shown to agents in MCP instructions.
+- `addr`: default listen address for `serve` (the `--addr` flag overrides it).
+- `lenient`: when `true`, disables OKF enforcement so waqwaq serves plain markdown that is not an OKF bundle. Off by default (waqwaq enforces OKF).
 
-- `title`: the wiki's display name and the MCP server identity. An MCP client sees this as the server name, not "waqwaq."
-- `mcp_description`: the one-liner shown to agents in MCP instructions. Omit to use a generic default.
-- `okf`: when `true`, requires a `type` frontmatter field on every page and enables type filtering in `wiki_list`, typed nodes in `wiki_graph`, and type-colored Oracle graph.
-- `theme` / `accent`: the [Lokta](https://github.com/msradam/lokta) design system. `theme`: `auto` (default), or a stock name (`paper`, `manuscript`, `bone`, `ink`, `indigo`, `highland`, `pine`, `mulberry`, `slate`, `steel`, `onyx`, and `-light` variants). `accent`: a pigment name (`marigold`, `peach`, `lavender`, `madder`, `walnut`, `turmeric`, `lac`, `aubergine`, `cinnabar`, `celadon`, `indigo`, `-light` variants) or any CSS color.
-- `webhook`: Slack-compatible POST when a write is queued for review.
-- `lint.require_frontmatter`: frontmatter fields that must be non-empty on every page.
-- `lint.banned_terms`: terms blocked from page bodies (`"severity": "error"` or `"warning"`).
+A `CLAUDE.md` at the wiki root, if present, is served to agents as MCP instructions.
 
-A `<dir>/.waqwaq/custom.css` overrides the built-in styles. Markdown files in `<dir>/.waqwaq/templates/` become new-page starting points.
+## Testing
 
-### Access control
+Deterministic MCP checks run through [ocarina](https://github.com/msradam/ocarina), which replays a YAML playbook against the live server with no model in the loop:
 
-By default writes commit straight to git and the web UI trusts loopback access. To gate the MCP endpoint, create `<dir>/.waqwaq/tokens.json`:
-
-```json
-{ "tokens": [
-  { "token": "ci-secret",   "name": "ci-bot", "trusted": false },
-  { "token": "adam-secret", "name": "adam",   "trusted": true }
-] }
+```bash
+go build -o waqwaq .
+ocarina play perf/smoke.yaml            # 13-step orient/navigate check on okf-demo
+ocarina play perf/okf-bundle.yaml       # interop check against the real crypto_bitcoin bundle
+ocarina load perf/load.yaml --vus 8 --threshold p95<500ms
 ```
 
-The MCP endpoint then requires `Authorization: Bearer <token>` (401 otherwise). A `trusted` token commits directly; any other token's writes become proposals. The token's `name` becomes the git author. `--review` queues every write regardless.
+`perf/smoke.yaml` and `perf/okf-bundle.yaml` double as CI smoke tests and exit non-zero on any failed assertion. Core and surface unit tests run with `go test ./...`.
 
-For the web UI, set `web.proxy_header` to delegate auth to a reverse proxy (oauth2-proxy, Authelia), or set `web.users` (each `{ "name", "password", "role" }`, password a bcrypt hash from `waqwaq passwd`) for built-in login. Roles: `viewer` reads, `editor` edits and uploads, `admin` also approves proposals. Run `waqwaq doctor` to check the posture before serving.
+## Not yet reattached
 
-Pass multiple directories to `serve` to host several wikis under `/w/<name>/`, each with its own git repo, tokens, and config.
+This baseline deliberately drops features that earlier versions had. They are cut, not hidden, and would each return as their own change:
 
-## Platforms
+- **Any write path**: editing, uploading, the review and proposal workflow, webhooks, token and proxy-header auth, roles. All of it existed to support writes. Reattaching writes means reintroducing a Core `Write`/`Delete` method plus a single trusted/untrusted token distinction, designed and reviewed on its own rather than left half-built here.
+- **SQLite full-text index**: replaced by the in-process `internal/search` (literal substring plus RE2 regex, parallel walk).
+- **Codebase-to-wiki scanner** (`scan`): generated a wiki from a Go import graph.
+- **Standalone JSON API** (`/api/*`): MCP is the machine-readable surface now. The web view's `/graph.json` is internal to the graph view, not a public API.
+- **Static export** (`export`): a standalone HTML site.
+- **Web theming**: accent and stock configuration, `custom.css`, template overrides.
+- **Multi-wiki farm mode**: serving several wikis under `/w/<name>/`.
 
-Pure Go, no cgo, cross-compiles to any `GOOS`/`GOARCH`. Full-text search uses the pure-Go `modernc.org/sqlite` driver; build with `-tags nofts` to drop the FTS index and fall back to substring search (selected automatically when `GOOS=zos`).
+See [BASELINE-NOTES.md](BASELINE-NOTES.md) for the full record of what was carried forward, what was cut, and the judgment calls behind the dependency and interface choices.
 
 ## Development
 
 ```bash
 go test ./...
-go build -o waqwaq .
+CGO_ENABLED=0 go build -o waqwaq .
 ```
 
 Developed with AI assistance.

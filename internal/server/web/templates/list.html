@@ -1,0 +1,21 @@
+{{define "content"}}
+<div class="listing">
+  <h1>Pages</h1>
+  {{if .Filter}}<p class="muted">Filtered by tag <span class="tag">{{.Filter}}</span> · <a href="/list">clear</a></p>{{end}}
+  <p class="muted">{{.Total}} page{{if ne .Total 1}}s{{end}}</p>
+  <input class="filter" type="search" placeholder="Filter pages…" oninput="filterRows(this.value)" aria-label="Filter pages">
+  <ul class="pagelist" id="pagelist">
+  {{range .Pages}}
+    <li data-key="{{.Slug}} {{.Title}} {{.Type}}">
+      <a href="/wiki/{{.Slug}}">{{.Title}}</a>
+      <span class="slug">{{.Slug}}</span>
+      {{if .Type}}<span class="pill">{{.Type}}</span>{{end}}
+      {{range .Tags}}<a class="tag" href="/list?tag={{.}}">{{.}}</a>{{end}}
+    </li>
+  {{end}}
+  </ul>
+</div>
+<script>
+function filterRows(q){q=q.toLowerCase();for(const li of document.querySelectorAll('#pagelist li')){li.style.display=li.dataset.key.toLowerCase().includes(q)?'':'none';}}
+</script>
+{{end}}

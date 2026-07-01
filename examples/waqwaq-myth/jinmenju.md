@@ -1,5 +1,10 @@
 ---
 title: The jinmenju tree
+type: Legend
+description: The Japanese "human-faced tree" whose fruit ripen as smiling faces, the eastern, Sinic branch of the same human-faced-tree motif.
+resource: https://en.wikipedia.org/wiki/Jinmenju
+tags: [japan, jinmenju, yokai, marvels]
+timestamp: 2026-06-01T00:00:00Z
 ---
 
 # The jinmenju tree

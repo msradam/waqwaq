@@ -1,9 +1,9 @@
-// Package tui is the terminal reader: an interactive shell over the same
-// kb.KnowledgeBase the CLI verbs use, against a local folder or a remote server
-// without knowing which.
+// Package tui is the terminal reader: an interactive shell over a read-only
+// core.Core, browsing a local OKF wiki folder.
 package tui
 
 import (
+	"context"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -13,8 +13,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/msradam/waqwaq/internal/kb"
-	"github.com/msradam/waqwaq/internal/store"
+	"github.com/msradam/waqwaq/core"
 )
 
 type item struct{ slug, title string }
@@ -23,7 +22,7 @@ func (i item) Title() string       { return i.title }
 func (i item) Description() string { return i.slug }
 func (i item) FilterValue() string { return i.slug + " " + i.title }
 
-func toItems(metas []store.PageMeta) []list.Item {
+func toItems(metas []core.PageMeta) []list.Item {
 	its := make([]list.Item, len(metas))
 	for i, m := range metas {
 		its[i] = item{slug: m.Slug, title: m.Title}
@@ -32,15 +31,16 @@ func toItems(metas []store.PageMeta) []list.Item {
 }
 
 type Model struct {
-	base     kb.KnowledgeBase
+	core     core.Core
 	list     list.Model
 	vp       viewport.Model
 	search   textinput.Model
 	all      []list.Item
 	cur      string
 	curBody  string
-	body     string // rendered page body, before the async related footer is appended
-	focus    int    // 0 list, 1 content
+	curEdges []core.EdgeRef // outbound+inbound of the current page, for 'r' and the footer
+	body     string         // rendered page body, before the related footer is appended
+	focus    int            // 0 list, 1 content
 	typing   bool
 	w, h     int
 	ready    bool // a window size is known
@@ -52,36 +52,31 @@ type Model struct {
 	renderW  int
 }
 
-// pagesMsg carries the page list loaded off the render loop; footerMsg carries a
-// page's backlinks and neighbors, computed off the render loop because the first
-// such call builds the whole link graph.
+// pagesMsg carries the page list loaded off the render loop.
 type (
-	pagesMsg  struct{ items []list.Item }
-	footerMsg struct {
-		slug string
-		text string
-	}
-	errMsg struct{ err error }
+	pagesMsg struct{ items []list.Item }
+	errMsg   struct{ err error }
 )
 
-func New(base kb.KnowledgeBase) (Model, error) {
+// New builds the TUI model over a read-only Core.
+func New(c core.Core) (Model, error) {
 	l := list.New(nil, list.NewDefaultDelegate(), 0, 0)
 	l.Title = "Loading…"
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
 	ti := textinput.New()
 	ti.Placeholder = "full-text search"
-	return Model{base: base, list: l, vp: viewport.New(0, 0), search: ti, status: "Loading pages…"}, nil
+	return Model{core: c, list: l, vp: viewport.New(0, 0), search: ti, status: "Loading pages…"}, nil
 }
 
 func (m Model) Init() tea.Cmd {
-	base := m.base
+	c := m.core
 	return func() tea.Msg {
-		metas, err := base.List()
+		res, err := c.List(context.Background(), "", "", "", 0, 0)
 		if err != nil {
 			return errMsg{err}
 		}
-		return pagesMsg{toItems(metas)}
+		return pagesMsg{toItems(res.Items)}
 	}
 }
 
@@ -96,7 +91,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.maybeOpenInitial())
 		} else if m.cur != "" {
 			m.render(m.cur)
-			cmds = append(cmds, m.footerCmd(m.cur))
 		}
 	case pagesMsg:
 		m.loaded = true
@@ -109,10 +103,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.list.Title = "Pages"
 		}
 		cmds = append(cmds, m.maybeOpenInitial())
-	case footerMsg:
-		if msg.slug == m.cur {
-			m.vp.SetContent(m.body + msg.text)
-		}
 	case errMsg:
 		m.loaded = true
 		m.status = msg.err.Error()
@@ -159,7 +149,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter", "l":
 			if m.focus == 0 {
 				if it, ok := m.list.SelectedItem().(item); ok {
-					cmds = append(cmds, m.open(it.slug))
+					m.open(it.slug)
 					m.focus = 1
 				}
 			}
@@ -188,45 +178,49 @@ func (m *Model) layout() {
 }
 
 // maybeOpenInitial opens the landing page once both the window size and the page
-// list are known, returning the command that loads its related footer.
+// list are known.
 func (m *Model) maybeOpenInitial() tea.Cmd {
 	if !m.ready || !m.loaded || m.opened || len(m.all) == 0 {
 		return nil
 	}
 	m.opened = true
-	slug := m.all[0].(item).slug
-	for _, it := range m.all {
-		if it.(item).slug == "index" {
-			slug = "index"
-			break
-		}
+	// index.md is the OKF traversal entry point. It is reserved, so it is not in
+	// the concept list; open it by name, falling back to the first concept.
+	if !m.open("index") {
+		m.open(m.all[0].(item).slug)
 	}
-	return m.open(slug)
+	return nil
 }
 
-func (m *Model) open(slug string) tea.Cmd {
-	page, err := m.base.Read(slug)
+// open reads a page and renders it, reporting whether it succeeded. Read inlines
+// the page's outbound and inbound edges, so the related footer and the 'r' walk
+// need no extra calls.
+func (m *Model) open(slug string) bool {
+	page, err := m.core.Read(context.Background(), slug)
 	if err != nil {
-		if canon, ok := m.base.ResolveLink(slug); ok {
-			page, err = m.base.Read(canon)
-		}
-	}
-	if err != nil || page == nil {
 		m.status = "not found: " + slug
-		return nil
+		return false
 	}
 	m.cur, m.curBody = page.Slug, page.Body
+	m.curEdges = mergeEdges(page.Outbound, page.Inbound)
 	m.render(m.cur)
-	return m.footerCmd(m.cur)
+	return true
 }
 
-// footerCmd computes a page's backlinks and neighbors off the render loop, since
-// the first such call on a cold store builds the entire link graph.
-func (m *Model) footerCmd(slug string) tea.Cmd {
-	base := m.base
-	return func() tea.Msg {
-		return footerMsg{slug: slug, text: relatedFooter(base, slug)}
+// mergeEdges combines outbound and inbound edges, de-duplicating by slug and
+// preserving order (outbound first).
+func mergeEdges(outbound, inbound []core.EdgeRef) []core.EdgeRef {
+	seen := make(map[string]bool)
+	var out []core.EdgeRef
+	for _, group := range [][]core.EdgeRef{outbound, inbound} {
+		for _, e := range group {
+			if !seen[e.Slug] {
+				seen[e.Slug] = true
+				out = append(out, e)
+			}
+		}
 	}
+	return out
 }
 
 // ensureRenderer builds the Glamour renderer once per width. WithStandardStyle
@@ -258,50 +252,35 @@ func (m *Model) render(slug string) {
 		}
 	}
 	m.body = out
-	m.vp.SetContent(out)
+	m.vp.SetContent(out + m.relatedFooter())
 	m.vp.GotoTop()
 	m.status = slug
 }
 
-func relatedFooter(base kb.KnowledgeBase, slug string) string {
-	var b strings.Builder
-	if bl, _ := base.Backlinks(slug); len(bl) > 0 {
-		b.WriteString("\n  ── backlinks ──\n")
-		for _, p := range bl {
-			b.WriteString("  ← " + p.Slug + "\n")
-		}
+// relatedFooter renders the current page's inlined edges as a footer, split into
+// outbound and inbound sections.
+func (m *Model) relatedFooter() string {
+	if len(m.curEdges) == 0 {
+		return ""
 	}
-	if nb, _ := base.Neighbors(slug, 1); len(nb) > 0 {
-		b.WriteString("\n  ── related (press r to walk) ──\n")
-		for _, n := range nb {
-			b.WriteString("  • " + n.Slug + "\n")
-		}
+	var b strings.Builder
+	b.WriteString("\n  ── related (press r to walk) ──\n")
+	for _, e := range m.curEdges {
+		b.WriteString("  • " + e.Slug + "\n")
 	}
 	return b.String()
 }
 
+// loadRelated repoints the list at the current page's linked neighbourhood,
+// using the edges already inlined by the last Read.
 func (m *Model) loadRelated(slug string) {
-	seen := map[string]bool{slug: true}
-	var its []list.Item
-	add := func(s, t string) {
-		if !seen[s] {
-			seen[s] = true
-			its = append(its, item{slug: s, title: t})
-		}
-	}
-	if nb, _ := m.base.Neighbors(slug, 1); nb != nil {
-		for _, n := range nb {
-			add(n.Slug, n.Title)
-		}
-	}
-	if bl, _ := m.base.Backlinks(slug); bl != nil {
-		for _, p := range bl {
-			add(p.Slug, p.Title)
-		}
-	}
-	if len(its) == 0 {
+	if len(m.curEdges) == 0 {
 		m.status = "no related pages for " + slug
 		return
+	}
+	its := make([]list.Item, 0, len(m.curEdges))
+	for _, e := range m.curEdges {
+		its = append(its, item{slug: e.Slug, title: e.Title})
 	}
 	m.list.SetItems(its)
 	m.list.Title = "related: " + slug
@@ -312,7 +291,7 @@ func (m *Model) runSearch(q string) {
 	if strings.TrimSpace(q) == "" {
 		return
 	}
-	hits, err := m.base.Search(q)
+	hits, err := m.core.Search(context.Background(), q, false, "", "", 0)
 	if err != nil {
 		m.status = err.Error()
 		return
@@ -370,9 +349,9 @@ func (m Model) View() string {
 	return body + "\n" + footer
 }
 
-// Run starts the terminal reader over base and blocks until the user quits.
-func Run(base kb.KnowledgeBase) error {
-	m, err := New(base)
+// Run starts the terminal reader over c and blocks until the user quits.
+func Run(c core.Core) error {
+	m, err := New(c)
 	if err != nil {
 		return err
 	}

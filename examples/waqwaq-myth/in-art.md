@@ -1,5 +1,9 @@
 ---
 title: The Waq-Waq tree in art
+type: Theme
+description: The tree as a subject of Persian, Mughal, and Ottoman manuscript painting, and the "waqwaq" scrollwork ornament it named.
+tags: [art, manuscript, painting, ornament]
+timestamp: 2026-06-01T00:00:00Z
 ---
 
 # The Waq-Waq tree in art

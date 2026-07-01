@@ -1,70 +1,40 @@
-{{define "page.html"}}<!doctype html>
-<html lang="en" data-theme="{{.Chrome.Theme}}">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{.Title}} · {{.Chrome.SiteTitle}}</title>
-{{template "headlinks" .Chrome}}
-</head>
-<body>
-<div class="layout">
-  {{template "sidebar" .Chrome}}
-  <main class="content">
-    {{if .IsSearch}}
-      <h1>Search</h1>
-      {{if .Query}}<p class="muted">{{len .Hits}} result(s) for “{{.Query}}”.</p>{{end}}
-      <ul class="results">
-        {{range .Hits}}<li><a href="{{$.Chrome.Base}}/wiki/{{.Slug}}">{{.Title}}</a><p class="muted snippet">{{.Snippet}}</p></li>
-        {{else}}<li class="muted">No matches.</li>{{end}}
-      </ul>
-    {{else}}
-      <article class="markdown">{{.Content}}</article>
-      {{if .Tags}}<div class="tags">{{range .Tags}}<a class="tag" href="{{$.Chrome.Base}}/tags/{{.}}">🍃 {{.}}</a>{{end}}</div>{{end}}
-      {{if .Slug}}
-      <section class="backlinks" data-backlinks="{{.Slug}}" hidden>
-        <h2>Referenced by</h2>
-        <ul></ul>
-      </section>
-      {{end}}
-      {{if .Slug}}
-      <footer class="attribution">
-        {{if .Attribution}}{{if .Attribution.Approver}}<span class="status status-merged">reviewed</span> {{end}}{{if .Attribution.Stale}}<span class="status status-pending">may be stale</span> {{end}}Last touched by <strong>{{.Attribution.Author}}</strong>{{if .Attribution.Approver}}, approved by <strong>{{.Attribution.Approver}}</strong>{{end}}{{if .Attribution.When}} · {{.Attribution.When}}{{end}} · {{end}}{{if .Chrome.CanEdit}}<a href="{{$.Chrome.Base}}/edit/{{.Slug}}">edit</a> · {{end}}<a href="{{$.Chrome.Base}}/history/{{.Slug}}">history</a>{{if .Chrome.CanEdit}} · <form class="inline-delete" method="post" action="{{$.Chrome.Base}}/delete/{{.Slug}}" onsubmit="return confirm('Delete this page? It stays recoverable in git history.');"><button type="submit" class="linkbtn">delete</button></form>{{end}}
-      </footer>
-      {{end}}
-    {{end}}
-  </main>
-  {{if and (not .IsSearch) .TOC}}
-  <aside class="toc-rail">
-    <p class="toc-title">On this page</p>
-    <nav>
-      {{range .TOC}}<a class="toc-l{{.Level}}" href="#{{.ID}}">{{.Text}}</a>{{end}}
-    </nav>
-  </aside>
+{{define "content"}}
+{{$p := .Page}}
+<article class="markdown">
+{{.Body}}
+</article>
+<aside class="sidebar">
+  {{if .Meta}}
+  <section class="meta">
+    <h3>Metadata</h3>
+    <dl>
+      {{if .Meta.Type}}<dt>Type</dt><dd>{{.Meta.Type}}</dd>{{end}}
+      {{if .Meta.Description}}<dt>Description</dt><dd>{{.Meta.Description}}</dd>{{end}}
+      {{if .Meta.Resource}}<dt>Resource</dt><dd><a href="{{.Meta.Resource}}" rel="noopener noreferrer">{{.Meta.Resource}}</a></dd>{{end}}
+      {{if .Meta.Tags}}<dt>Tags</dt><dd>{{range .Meta.Tags}}<a class="tag" href="/list?tag={{.}}">{{.}}</a> {{end}}</dd>{{end}}
+      {{if .Meta.Timestamp}}<dt>Updated</dt><dd>{{.Meta.Timestamp}}</dd>{{end}}
+    </dl>
+  </section>
   {{end}}
-</div>
-<script type="module">
-  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-  mermaid.initialize({ startOnLoad: true, theme: 'neutral' });
-</script>
-<script>
-(function(){
-  var sec = document.querySelector('.backlinks[data-backlinks]');
-  if (!sec) return;
-  var bar = document.querySelector('.sidebar');
-  var base = (bar && bar.dataset.base) || '';
-  var slug = sec.getAttribute('data-backlinks');
-  fetch(base + '/api/backlinks/' + slug.split('/').map(encodeURIComponent).join('/'))
-    .then(function(r){ return r.json(); })
-    .then(function(d){
-      var pages = (d && d.pages) || [];
-      if (!pages.length) return;
-      var esc = function(s){ return String(s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
-      sec.querySelector('ul').innerHTML = pages.map(function(p){
-        return '<li><a href="' + base + '/wiki/' + p.slug.split('/').map(encodeURIComponent).join('/') + '">' + esc(p.title || p.slug) + '</a></li>';
-      }).join('');
-      sec.hidden = false;
-    }).catch(function(){});
-})();
-</script>
-</body>
-</html>{{end}}
+  {{if .TOC}}
+  <nav class="toc">
+    <h3>On this page</h3>
+    <ul>
+    {{range .TOC}}<li class="toc-l{{.Level}}"><a href="#{{.ID}}">{{.Text}}</a></li>{{end}}
+    </ul>
+  </nav>
+  {{end}}
+  {{if $p.Outbound}}
+  <section class="links">
+    <h3>Links to</h3>
+    <ul>{{range $p.Outbound}}<li><a href="/wiki/{{.Slug}}">{{.Title}}</a>{{if .Type}} <span class="pill">{{.Type}}</span>{{end}}</li>{{end}}</ul>
+  </section>
+  {{end}}
+  {{if $p.Inbound}}
+  <section class="links">
+    <h3>Linked from</h3>
+    <ul>{{range $p.Inbound}}<li><a href="/wiki/{{.Slug}}">{{.Title}}</a>{{if .Type}} <span class="pill">{{.Type}}</span>{{end}}</li>{{end}}</ul>
+  </section>
+  {{end}}
+</aside>
+{{end}}
